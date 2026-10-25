@@ -21,15 +21,20 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONIOENCODING: utf-8
-        run: pytest --tb=short 2>&1 | Tee-Object -FilePath test-output.txt
+        run: pytest --tb=long 2>&1 | Tee-Object -FilePath test-output.txt
         shell: pwsh
-      - name: Show failures (visible in run summary)
+      - name: Upload test output
         if: always()
-        shell: pwsh
-        run: |
-          Get-Content test-output.txt -ErrorAction SilentlyContinue | Select-Object -Last 60 | ForEach-Object { Write-Output $_ }
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: test-output.txt
+          retention-days: 7
       - name: Gate
         if: always()
         shell: pwsh
         run: |
-          if (Select-String -Path test-output.txt -Pattern "FAILED|ERROR" -Quiet -ErrorAction SilentlyContinue) { exit 1 }
+          if (Select-String -Path test-output.txt -Pattern "FAILED|ERROR" -Quiet -ErrorAction SilentlyContinue) {
+            Write-Output "TESTS FAILED"
+            exit 1
+          }
