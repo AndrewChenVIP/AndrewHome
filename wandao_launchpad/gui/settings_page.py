@@ -21,7 +21,7 @@ class SettingsPage(QtWidgets.QWidget):
         self._current_env_id: str = ""
 
         lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setContentsMargins(20, 16, 20, 16)
 
         # ---- 环境管理 ----
         env_box = QtWidgets.QGroupBox("环境（一个环境 = ComfyUI 根目录 + Python；★=当前激活）")

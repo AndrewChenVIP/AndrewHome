@@ -21,7 +21,7 @@ class KernelPage(QtWidgets.QWidget):
         self._skip = 0
 
         lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setContentsMargins(20, 16, 20, 16)
 
         head = QtWidgets.QHBoxLayout()
         title = QtWidgets.QLabel("内核版本管理")

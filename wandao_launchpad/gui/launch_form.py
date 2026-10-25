@@ -22,7 +22,7 @@ class LaunchForm(QtWidgets.QWidget):
         self._loading = True  # 装载期不发防抖
 
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(16, 12, 16, 12)
+        root.setContentsMargins(20, 16, 20, 16)
 
         box1 = QtWidgets.QGroupBox("运行")
         g1 = QtWidgets.QGridLayout(box1)

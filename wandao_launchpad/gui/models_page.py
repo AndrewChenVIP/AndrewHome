@@ -20,7 +20,7 @@ class ModelsPage(QtWidgets.QWidget):
         self._current: int = -1
 
         lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setContentsMargins(20, 16, 20, 16)
 
         head = QtWidgets.QHBoxLayout()
         title = QtWidgets.QLabel("外置模型库")

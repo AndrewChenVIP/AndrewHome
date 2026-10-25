@@ -77,7 +77,7 @@ def test_gui_theme_switch_and_env_combo(home, qapp):
         # 主题切换：实时换 QSS + 持久化
         win._apply_theme("dark")
         assert theme.current_theme() == "dark"
-        assert "#1e2128" in qapp.styleSheet()      # 深色 window_bg token 已生效
+        assert "#14161c" in qapp.styleSheet()      # 深色 window_bg token 已生效
         assert store.load().get_ui_pref("theme") == "dark"
         # 环境下拉：切到二号 → 配置落盘
         idx = win.env_combo.findData("e2")

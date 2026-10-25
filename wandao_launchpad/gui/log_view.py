@@ -11,7 +11,7 @@ class LogView(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setContentsMargins(20, 16, 20, 16)
 
         bar = QtWidgets.QHBoxLayout()
         self.btn_follow = QtWidgets.QPushButton("暂停滚动")

@@ -10,7 +10,7 @@ import webbrowser
 
 from PyQt5 import QtCore, QtWidgets
 
-from .. import __version__
+from .. import APP_NAME, __version__
 from ..config import ConfigStore
 from ..context import build_context
 from .launch_form import LaunchForm
@@ -30,7 +30,8 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.store = store
         self.setWindowTitle(f"万道启动台 WandaoLaunchpad v{__version__}")
-        self.resize(920, 640)
+        self.resize(1000, 680)
+        self.setMinimumSize(920, 640)
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -38,13 +39,26 @@ class MainWindow(QtWidgets.QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # 侧边导航
+        # 侧边栏（品牌头部 + 导航）
+        sidebar = QtWidgets.QWidget()
+        sidebar.setObjectName("sidebarwrap")
+        side_lay = QtWidgets.QVBoxLayout(sidebar)
+        side_lay.setContentsMargins(10, 16, 10, 12)
+        side_lay.setSpacing(6)
+        brand = QtWidgets.QLabel(APP_NAME)
+        brand.setObjectName("sidebar_title")
+        ver = QtWidgets.QLabel(f"WandaoLaunchpad v{__version__}")
+        ver.setObjectName("sidebar_version")
+        side_lay.addWidget(brand)
+        side_lay.addWidget(ver)
+        side_lay.addSpacing(10)
         self.nav = QtWidgets.QListWidget()
         self.nav.setObjectName("sidebar")
-        self.nav.setFixedWidth(170)
         for label, _ in NAV_ITEMS:
             self.nav.addItem(label)
-        root.addWidget(self.nav)
+        side_lay.addWidget(self.nav, 1)
+        sidebar.setFixedWidth(190)
+        root.addWidget(sidebar)
 
         self.stack = QtWidgets.QStackedWidget()
         self.stack.setObjectName("content")
@@ -105,7 +119,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_launch_page(self) -> QtWidgets.QWidget:
         page = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(page)
-        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setContentsMargins(20, 16, 20, 16)
 
         head = QtWidgets.QHBoxLayout()
         title = QtWidgets.QLabel("ComfyUI 一键启动")
@@ -121,6 +135,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.form = LaunchForm(self.store)
         self.form.changed.connect(lambda: self.statusBar().showMessage("配置已保存", 1500))
         lay.addWidget(self.form, 1)
+
+        # 运行信息卡（只读，当前环境摘要）
+        info_box = QtWidgets.QGroupBox("运行信息")
+        ig = QtWidgets.QGridLayout()
+        ig.setHorizontalSpacing(18)
+        ig.setVerticalSpacing(8)
+        self.info_fields: dict[str, QtWidgets.QLabel] = {}
+        for i, (label, key) in enumerate((
+                ("环境目录", "root"), ("Python", "python"),
+                ("服务地址", "url"), ("日志文件", "log"))):
+            ig.addWidget(QtWidgets.QLabel(label), i // 2, (i % 2) * 2)
+            val = QtWidgets.QLabel("—")
+            val.setObjectName("muted")
+            ig.addWidget(val, i // 2, (i % 2) * 2 + 1)
+            self.info_fields[key] = val
+        info_box.setLayout(ig)
+        lay.addWidget(info_box)
 
         self.big_btn = QtWidgets.QPushButton("🚀 一键启动")
         self.big_btn.setObjectName("primary")
@@ -148,7 +179,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_about_page(self) -> QtWidgets.QWidget:
         page = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(page)
-        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setContentsMargins(20, 16, 20, 16)
         lay.addWidget(QtWidgets.QLabel(f"万道启动台 WandaoLaunchpad v{__version__}"))
         lay.addWidget(QtWidgets.QLabel(
             "万道自研 ComfyUI 启动器：只做编排器，不分叉内核。\n"
@@ -191,6 +222,19 @@ class MainWindow(QtWidgets.QMainWindow):
             idx = self.env_combo.findData(cfg.active_env_id)
             self.env_combo.setCurrentIndex(max(0, idx))
             self.env_combo.blockSignals(False)
+            # 运行信息卡
+            try:
+                ctx = build_context(cfg)
+                f = self.info_fields
+                f["root"].setText(str(ctx.comfyui_root))
+                f["python"].setText(ctx.python_exe)
+                f["url"].setText(ctx.base_url)
+                f["log"].setText(str(ctx.comfyui_log))
+                for val in f.values():
+                    val.setToolTip(val.text())
+            except LookupError:
+                for val in self.info_fields.values():
+                    val.setText("—（未配置环境）")
         except Exception:
             logger.warning("环境列表刷新失败", exc_info=True)
 

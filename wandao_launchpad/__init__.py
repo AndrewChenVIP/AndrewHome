@@ -8,4 +8,6 @@
 5. 禁止裸 ``except: pass``——吞异常必须留日志。
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
+
+from .constants import APP_NAME  # noqa: E402,F401  (constants 无回向依赖，安全)
