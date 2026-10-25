@@ -711,7 +711,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self._auto_worker.stop()
             self._auto_worker.wait(3000)
         for worker in (self._status_worker, self._start_worker, self._stop_worker,
-                       self._support_worker, getattr(self, "_doctor_worker", None)):
+                       self._support_worker, getattr(self, "_doctor_worker", None),
+                       getattr(self, "_tarch_worker", None)):
+            if worker is not None and worker.isRunning():
+                worker.wait(2000)
+        for page in (self.plugins_page, self.kernel_page, self.models_page,
+                     self.mbrowse_page, self.archive_page):
+            w = getattr(page, "_worker", None)
+            if w is not None and w.isRunning():
+                w.wait(2000)
             if worker is not None and worker.isRunning():
                 worker.wait(2000)
         if self._tray is not None:
