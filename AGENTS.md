@@ -17,6 +17,8 @@ python -m wandao_launchpad logs comfyui -n 100   # 务必默认 no-follow（-f �
 ```
 
 - 按**退出码 + 单行 JSON** 分支，不要正则匹配人类文案。
+- `status` 的 `running` 看**端口真相**（/system_stats 应答）；`external:true` 表示服务在跑但不受本启动台管理——此时 **stop 不会杀它**，别反复重试。
+- `start` 遇端口被外部实例占用时退 2 + `external:true`；要接管先让外部实例自己停。
 - 退出码定义在 `wandao_launchpad/cli/exitcodes.py`，语义冻结。
 - 配置目录：环境变量 `WANDAO_LAUNCHPAD_HOME` 或默认 `<项目>/launchpad/`（含本机绝对路径，**禁止提交进 git**）。
 

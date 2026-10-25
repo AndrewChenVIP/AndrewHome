@@ -29,8 +29,11 @@ python -m wandao_launchpad gui
 |---|---|
 | 0 | 成功 |
 | 1 | 通用错误（配置缺失/路径/IO/超时） |
-| 2 | start 拒绝重复启动（已在跑） |
+| 2 | start 拒绝重复启动（本启动台实例在跑，或端口被外部实例占用 `external:true`） |
 | 3 | status：未运行 |
+
+> **端口真相原则**：status 以 `/system_stats` 是否应答判断"在跑"，以 pidfile 判断"是不是我们起的"。
+> 外部实例（别的启动器/手动启动）在跑时 status 如实上报（`external:true`），stop **绝不会**杀它。
 
 ## 目录结构
 

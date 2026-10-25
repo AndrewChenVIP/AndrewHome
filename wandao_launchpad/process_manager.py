@@ -46,6 +46,7 @@ class StartResult:
     log_path: str | None
     error: str | None = None
     running_env_id: str = ""  # 拒绝启动时：当前占用者的环境 id
+    external: bool = False    # 端口被外部实例（非本启动台管理）占用
 
 
 @dataclass
@@ -86,6 +87,15 @@ class ProcessManager:
         if existing is not None:
             base.running_env_id = existing.env_id
             base.error = f"已有实例在跑: PID={existing.pid} (env={existing.env_id})"
+            base.elapsed_sec = time.monotonic() - t0
+            return base
+
+        # 端口真相：pidfile 说没有，但端口上已有服务在答话（别的启动器/手动起的）
+        # —— 不能再 spawn 一个注定撞端口的实例，如实拒绝并标记 external。
+        if probe(url):
+            base.external = True
+            base.error = (f"端口 {self.ctx.port} 已有外部 ComfyUI 在服务"
+                          f"（非本启动台管理），拒绝重复启动")
             base.elapsed_sec = time.monotonic() - t0
             return base
 
@@ -203,14 +213,18 @@ class ProcessManager:
         if rec and not alive:
             pidfile.clear(self.pidfile_path)
             rec = None
-        running = probe(self.ctx.base_url) if rec else False
+        # 端口真相优先：有没有服务在答话，一看便知；pidfile 只回答"是不是我们起的"
+        reachable = probe(self.ctx.base_url)
+        running = reachable
+        external = reachable and rec is None
         since = None
         if rec and rec.started_at > 0:
             since = datetime.datetime.fromtimestamp(
                 rec.started_at, tz=datetime.timezone.utc).isoformat()
         return {
             "running": running,
-            "http_reachable": running,
+            "http_reachable": reachable,
+            "external": external,  # True = 端口有服务但不受本启动台管理（stop 不会碰它）
             "pid": rec.pid if rec else None,
             "port": self.ctx.port,
             "url": self.ctx.base_url,

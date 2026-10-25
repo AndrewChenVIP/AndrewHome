@@ -125,3 +125,44 @@ def test_logs_tail(fake_home, tmp_path):
     assert code == ec.EXIT_OK
     tail = buf.getvalue().strip().splitlines()
     assert tail == ["line2", "line3"]  # 真_tail 只取最后 N 行
+
+
+def test_external_instance_occupying_port(fake_home):
+    """回归（真机事故场景）：端口被外部实例占用（别的启动器/手动起，无 pidfile）。
+
+    期望：start 拒绝（退2，external=true）而非 spawn 撞端口；status 如实报
+    running+external；stop 绝不动外部进程。
+    """
+    import http.server
+    import threading
+
+    class _Ext(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *a):  # 静音
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), _Ext)
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    try:
+        # 1) start：拒绝 + 退 2 + external 标记
+        code, payload = _run(fake_home, "start")
+        assert code == ec.EXIT_ALREADY_RUNNING
+        assert payload["started"] is False and payload["external"] is True
+
+        # 2) status：如实报运行中 + external
+        code, payload = _run(fake_home, "status")
+        assert code == ec.EXIT_OK
+        assert payload["running"] is True and payload["external"] is True
+        assert payload["pid"] is None
+
+        # 3) stop：不碰外部进程（no-op）
+        code, payload = _run(fake_home, "stop")
+        assert code == ec.EXIT_OK and payload["stopped"] is False
+    finally:
+        srv.shutdown()
+        srv.server_close()
