@@ -10,11 +10,18 @@
 
 ```bash
 python -m wandao_launchpad status --json   # 判断在不在跑：0=在跑 3=未跑 1=异常
-python -m wandao_launchpad start           # 阻塞到就绪；已在跑退 2
+python -m wandao_launchpad start           # 阻塞到就绪；已在跑/端口被占退 2
 python -m wandao_launchpad stop            # 幂等；作用于当前在跑的实例
 python -m wandao_launchpad info --json     # 看生效配置，不启动任何东西
 python -m wandao_launchpad logs comfyui -n 100   # 务必默认 no-follow（-f 会阻塞）
+python -m wandao_launchpad plugins list --json   # 插件目录扫描（纯本地，快）
+python -m wandao_launchpad kernel info --json    # 内核版本+提交+脏树标记
 ```
+
+- `plugins check-updates` 走 git 网络（并行 8 worker），慢网络下耐心等，别并发重复调。
+- `kernel update` / `kernel checkout --yes` 在 ComfyUI 运行中或内核树脏时直接拒绝——这是保护，别绕过。
+- 危险操作有确认位：`plugins uninstall NAME --yes`、`kernel checkout REF --yes`。
+- `kernel update` 已是最新时退 **4**（不是错误）。
 
 - 按**退出码 + 单行 JSON** 分支，不要正则匹配人类文案。
 - `status` 的 `running` 看**端口真相**（/system_stats 应答）；`external:true` 表示服务在跑但不受本启动台管理——此时 **stop 不会杀它**，别反复重试。

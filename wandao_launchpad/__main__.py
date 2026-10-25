@@ -6,8 +6,9 @@ import sys
 
 
 def _is_cli_invocation(argv: list[str]) -> bool:
-    cli_verbs = {"start", "stop", "status", "restart", "info", "logs", "help",
-                 "-h", "--help", "--json", "-v", "--version"}
+    cli_verbs = {"start", "stop", "status", "restart", "info", "logs", "plugins",
+                 "kernel", "models", "help", "-h", "--help", "--json", "-v",
+                 "--version"}
     return bool(argv) and argv[0] in cli_verbs
 
 

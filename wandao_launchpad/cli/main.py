@@ -196,6 +196,172 @@ def _follow(path: Path) -> None:
                 time.sleep(0.5)
 
 
+# ---------- 插件 / 内核 / 模型库 ----------
+
+def _custom_nodes_dir(ctx) -> Path:
+    return ctx.comfyui_root / "ComfyUI" / "custom_nodes"
+
+
+def cmd_plugins(args) -> int:
+    from ..plugins import PluginService
+
+    store = ConfigStore(Path(args.home) if args.home else None)
+    ctx, err = _load_ctx(store, None)
+    if ctx is None:
+        _emit({"ok": False, "error": err}, args.json, f"错误: {err}")
+        return ec.EXIT_ERROR
+    svc = PluginService(_custom_nodes_dir(ctx))
+
+    try:
+        if args.action == "list":
+            items = svc.list()
+            payload = {"ok": True, "count": len(items),
+                       "plugins": [p.__dict__ for p in items]}
+            _emit(payload, args.json, f"{len(items)} 个插件（git {sum(1 for p in items if p.is_git)}"
+                                       f"，停用 {sum(1 for p in items if not p.enabled)}）")
+            return ec.EXIT_OK
+        if args.action in ("enable", "disable"):
+            if not args.name:
+                _emit({"ok": False, "error": "缺少插件名"}, args.json, "缺少插件名")
+                return ec.EXIT_ERROR
+            info = svc.set_enabled(args.name, args.action == "enable")
+            payload = {"ok": True, "action": args.action, "plugin": info.__dict__}
+            _emit(payload, args.json, f"已{args.action} {info.dir_name}")
+            return ec.EXIT_OK
+        if args.action == "uninstall":
+            if not args.name:
+                _emit({"ok": False, "error": "缺少插件名"}, args.json, "缺少插件名")
+                return ec.EXIT_ERROR
+            if not args.yes:
+                _emit({"ok": False, "error": "卸载需 --yes 确认（不可恢复）"},
+                      args.json, "卸载需 --yes 确认")
+                return ec.EXIT_ERROR
+            svc.uninstall(args.name)
+            _emit({"ok": True, "action": "uninstall", "target": args.name},
+                  args.json, f"已卸载 {args.name}")
+            return ec.EXIT_OK
+        if args.action == "check-updates":
+            results = svc.check_updates()
+            outdated = [r["dir_name"] for r in results if r["outdated"]]
+            payload = {"ok": True, "checked": len(results),
+                       "outdated": outdated, "results": results}
+            _emit(payload, args.json,
+                  f"检查 {len(results)} 个，可更新 {len(outdated)} 个"
+                  + (f": {', '.join(outdated[:10])}" if outdated else ""))
+            return ec.EXIT_OK
+        if args.action == "update-all":
+            results = svc.update_all()
+            all_ok = all(r["ok"] for r in results)
+            payload = {"ok": all_ok, "count": len(results), "results": results}
+            _emit(payload, args.json,
+                  f"更新完成 {sum(1 for r in results if r['ok'])}/{len(results)}"
+                  f"（跳过 {sum(1 for r in results if r['skipped'])}）")
+            return ec.EXIT_OK if all_ok else ec.EXIT_ERROR
+        if args.action == "update":
+            if not args.name:
+                _emit({"ok": False, "error": "缺少插件名"}, args.json, "缺少插件名")
+                return ec.EXIT_ERROR
+            result = svc.update_one(args.name)
+            payload = {"ok": result["ok"], **result}
+            _emit(payload, args.json,
+                  f"已更新 {args.name}" if result["ok"] else f"未更新 {args.name}: {result['detail']}")
+            return ec.EXIT_OK if result["ok"] else ec.EXIT_ERROR
+    except (FileNotFoundError, RuntimeError) as exc:
+        _emit({"ok": False, "error": str(exc)}, args.json, f"错误: {exc}")
+        return ec.EXIT_ERROR
+
+    _emit({"ok": False, "error": f"未知操作: {args.action}"}, args.json,
+          f"未知操作: {args.action}")
+    return ec.EXIT_ERROR
+
+
+def cmd_kernel(args) -> int:
+    from ..kernel import KernelService
+
+    store = ConfigStore(Path(args.home) if args.home else None)
+    ctx, err = _load_ctx(store, None)
+    if ctx is None:
+        _emit({"ok": False, "error": err}, args.json, f"错误: {err}")
+        return ec.EXIT_ERROR
+    svc = KernelService(ctx.comfyui_root / "ComfyUI",
+                        base_url=None if args.action == "info" else ctx.base_url)
+
+    try:
+        if args.action == "info":
+            info = svc.info()
+            payload = {"ok": True, **info.__dict__}
+            _emit(payload, args.json,
+                  f"ComfyUI {info.comfyui_version} @ {info.commit}"
+                  f"{'（有未提交改动）' if info.dirty else ''}")
+            return ec.EXIT_OK
+        if args.action == "update":
+            result = svc.update(dry_run=args.dry_run, stable_only=args.stable_only)
+            payload = {"ok": True, **result}
+            code = ec.EXIT_OK if result["updated"] else ec.EXIT_ALREADY_LATEST
+            _emit(payload, args.json,
+                  f"已更新 → {result['to']}" if result["updated"]
+                  else f"已是最新（{result['to']}）")
+            return code
+        if args.action == "log":
+            rows = svc.log(count=args.lines, skip=args.skip)
+            payload = {"ok": True, "count": len(rows), "commits": rows}
+            _emit(payload, args.json,
+                  "\n".join(f"{r['commit']} {r['date'][:10]} {r['subject'][:60]}"
+                            for r in rows) or "（无提交）")
+            return ec.EXIT_OK
+        if args.action == "checkout":
+            if not args.yes:
+                _emit({"ok": False, "error": "切换内核版本需 --yes 确认"}, args.json,
+                      "切换内核版本需 --yes 确认")
+                return ec.EXIT_ERROR
+            commit = svc.checkout(args.ref)
+            _emit({"ok": True, "checked_out": commit}, args.json, f"已切换到 {commit}")
+            return ec.EXIT_OK
+    except RuntimeError as exc:
+        _emit({"ok": False, "error": str(exc)}, args.json, f"错误: {exc}")
+        return ec.EXIT_ERROR
+    return ec.EXIT_ERROR
+
+
+def cmd_models(args) -> int:
+    from ..model_paths import ModelPathsService
+
+    store = ConfigStore(Path(args.home) if args.home else None)
+    ctx, err = _load_ctx(store, None)
+    if ctx is None:
+        _emit({"ok": False, "error": err}, args.json, f"错误: {err}")
+        return ec.EXIT_ERROR
+    svc = ModelPathsService(ctx.comfyui_root / "ComfyUI", store.config_dir)
+
+    if args.action == "list":
+        libs = svc.load_libraries()
+        payload = {"ok": True, "count": len(libs),
+                   "libraries": [{**l.__dict__,
+                                  "effective_mappings": svc.effective_mappings(l)}
+                                 for l in libs]}
+        _emit(payload, args.json,
+              f"{len(libs)} 个库（启用 {sum(1 for l in libs if l.enabled)}）")
+        return ec.EXIT_OK
+    if args.action == "import":
+        n = svc.import_existing()
+        _emit({"ok": True, "imported": n}, args.json,
+              f"导入 {n} 个库" if n else "无可导入（sidecar 已存在或无 yaml）")
+        return ec.EXIT_OK
+    if args.action == "validate":
+        problems = svc.validate()
+        payload = {"ok": not problems, "problems": problems}
+        _emit(payload, args.json,
+              "体检通过" if not problems else f"{len(problems)} 个问题:\n" + "\n".join(problems))
+        return ec.EXIT_OK if not problems else ec.EXIT_ERROR
+    if args.action == "apply":
+        result = svc.apply()
+        _emit({"ok": True, **result}, args.json,
+              f"已写入 {result['libraries']} 库 / {result['mappings']} 映射"
+              + (f"（备份: {result['backup']}）" if result["backup"] else ""))
+        return ec.EXIT_OK
+    return ec.EXIT_ERROR
+
+
 # ---------- 参数解析 ----------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -236,6 +402,27 @@ def build_parser() -> argparse.ArgumentParser:
                     help="持续跟踪（阻塞！自动化脚本用默认 no-follow）")
     sp.add_argument("--no-follow", dest="follow", action="store_false")
     sp.set_defaults(func=cmd_logs, follow=False)
+
+    sp = sub.add_parser("plugins", help="管理 custom_nodes 插件")
+    sp.add_argument("action", choices=["list", "enable", "disable", "uninstall",
+                                       "check-updates", "update", "update-all"])
+    sp.add_argument("name", nargs="?", help="目标插件 dir_name（list/check/update-all 不需要）")
+    sp.add_argument("--yes", action="store_true", help="危险操作确认位（uninstall）")
+    sp.set_defaults(func=cmd_plugins)
+
+    sp = sub.add_parser("kernel", help="ComfyUI 内核版本管理")
+    sp.add_argument("action", choices=["info", "update", "log", "checkout"])
+    sp.add_argument("ref", nargs="?", help="checkout 目标（commit/tag/branch）")
+    sp.add_argument("--dry-run", action="store_true")
+    sp.add_argument("--stable-only", action="store_true", help="只更新到稳定版标签")
+    sp.add_argument("-n", "--lines", type=int, default=50, help="log 条数")
+    sp.add_argument("--skip", type=int, default=0, help="log 分页偏移")
+    sp.add_argument("--yes", action="store_true", help="checkout 确认位")
+    sp.set_defaults(func=cmd_kernel)
+
+    sp = sub.add_parser("models", help="外置模型库（extra_model_paths.yaml）")
+    sp.add_argument("action", choices=["list", "import", "validate", "apply"])
+    sp.set_defaults(func=cmd_models)
 
     return p
 

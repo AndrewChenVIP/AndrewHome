@@ -28,9 +28,31 @@ python -m wandao_launchpad gui
 | 码 | 含义 |
 |---|---|
 | 0 | 成功 |
-| 1 | 通用错误（配置缺失/路径/IO/超时） |
+| 1 | 通用错误（配置缺失/路径/IO/超时；`models validate` 发现问题） |
 | 2 | start 拒绝重复启动（本启动台实例在跑，或端口被外部实例占用 `external:true`） |
 | 3 | status：未运行 |
+| 4 | kernel update：已是最新，无变更 |
+
+## 管理三件套（v0.2）
+
+```bash
+# 插件：list / enable NAME / disable NAME / uninstall NAME --yes / check-updates / update [NAME] / update-all
+python -m wandao_launchpad plugins list --json
+python -m wandao_launchpad plugins check-updates     # 并行（8 worker）git 检查
+python -m wandao_launchpad plugins update-all        # 只对干净树 pull --ff-only；脏树跳过不动现场
+
+# 内核：info / update [--stable-only --dry-run] / log [-n N --skip S] / checkout REF --yes
+python -m wandao_launchpad kernel info               # 版本 + 提交 + 脏树标记
+python -m wandao_launchpad kernel update --dry-run   # 先看会做什么
+# 写操作前置拒绝：ComfyUI 运行中（端口真相）/ 内核树脏
+
+# 外置模型库：list / import / validate / apply
+python -m wandao_launchpad models import             # 把现有 extra_model_paths.yaml 导入托管
+python -m wandao_launchpad models apply              # sidecar 渲染 yaml（旧文件先备份）
+```
+
+- 插件启停沿用 ComfyUI-Manager 的 `.disabled` 目录后缀约定。
+- 模型库唯一真源是 sidecar（`launchpad/model_libs.json`），yaml 是渲染产物；路径含 `#`/中文/空格都由 PyYAML 保证不坏。
 
 > **端口真相原则**：status 以 `/system_stats` 是否应答判断"在跑"，以 pidfile 判断"是不是我们起的"。
 > 外部实例（别的启动器/手动启动）在跑时 status 如实上报（`external:true`），stop **绝不会**杀它。

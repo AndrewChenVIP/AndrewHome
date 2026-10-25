@@ -20,7 +20,9 @@ from .workers import LogTailWorker, StartWorker, StatusWorker, StopWorker
 
 logger = logging.getLogger(__name__)
 
-NAV_ITEMS = [("🚀 启动", "launch"), ("📋 日志", "logs"), ("⚙️ 设置", "settings"), ("ℹ️ 关于", "about")]
+NAV_ITEMS = [("🚀 启动", "launch"), ("📋 日志", "logs"), ("🧩 插件", "plugins"),
+             ("🧬 内核", "kernel"), ("📂 模型库", "models"), ("⚙️ 设置", "settings"),
+             ("ℹ️ 关于", "about")]
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -51,13 +53,23 @@ class MainWindow(QtWidgets.QMainWindow):
         # 页面
         self.launch_page = self._build_launch_page()
         self.log_page = LogView()
+        from .plugins_page import PluginsPage
+        from .kernel_page import KernelPage
+        from .models_page import ModelsPage
+        status = self.statusBar().showMessage
+        self.plugins_page = PluginsPage(store, status_cb=lambda m: status(m, 5000))
+        self.kernel_page = KernelPage(store, status_cb=lambda m: status(m, 5000))
+        self.models_page = ModelsPage(store, status_cb=lambda m: status(m, 5000))
         self.settings_page = SettingsPage(store)
         self.settings_page.saved.connect(self._on_settings_saved)
         self.about_page = self._build_about_page()
-        for page in (self.launch_page, self.log_page, self.settings_page, self.about_page):
+        for page in (self.launch_page, self.log_page, self.plugins_page,
+                     self.kernel_page, self.models_page, self.settings_page,
+                     self.about_page):
             self.stack.addWidget(page)
 
-        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self._loaded_pages: set[int] = set()
+        self.nav.currentRowChanged.connect(self._on_nav_changed)
         self.nav.setCurrentRow(0)
 
         self.statusBar().showMessage("就绪")
@@ -74,6 +86,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._state = "idle"  # idle | starting | running | stopping
 
         QtCore.QTimer.singleShot(0, self._initial_status)
+
+    def _on_nav_changed(self, row: int) -> None:
+        self.stack.setCurrentIndex(row)
+        # 首次进入的页面自动拉数据（插件/内核；模型库自带定时器）
+        if row not in self._loaded_pages:
+            self._loaded_pages.add(row)
+            page = self.stack.widget(row)
+            if page is self.plugins_page or page is self.kernel_page:
+                page.reload()
 
     # ---------- 启动页 ----------
 

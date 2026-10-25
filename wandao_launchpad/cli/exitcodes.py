@@ -5,8 +5,9 @@
 
 EXIT_OK = 0               # 成功
 EXIT_ERROR = 1            # 通用错误（配置缺失、路径非法、IO、超时）
-EXIT_ALREADY_RUNNING = 2  # start：已有实例在跑，拒绝重复启动
+EXIT_ALREADY_RUNNING = 2  # start：已有实例在跑（含端口被外部实例占用），拒绝重复启动
 EXIT_NOT_RUNNING = 3      # status：未运行
+EXIT_ALREADY_LATEST = 4   # update：已是最新，无变更
 
 EXIT_NAMES = {
     EXIT_OK: "ok",

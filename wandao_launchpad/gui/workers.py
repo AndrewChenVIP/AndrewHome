@@ -28,6 +28,23 @@ class _Worker(QtCore.QThread):
         self.finished_sig.emit(ok, payload)
 
 
+class FunctionWorker(_Worker):
+    """通用后台执行器：任意可调用 → (ok, payload)。异常兜住并带出来。"""
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+
+    def run(self) -> None:
+        try:
+            payload = self._fn()
+            ok = not (isinstance(payload, dict) and payload.get("ok") is False)
+            self._done(ok, payload if isinstance(payload, dict) else {"result": payload})
+        except Exception as exc:  # noqa: BLE001 —— worker 边界必须兜底并上报
+            logger.error("FunctionWorker 异常", exc_info=True)
+            self._done(False, {"error": str(exc)})
+
+
 class StartWorker(_Worker):
     def __init__(self, store: ConfigStore, parent=None):
         super().__init__(parent)
