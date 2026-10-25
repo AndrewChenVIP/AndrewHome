@@ -84,7 +84,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stop_worker = None
         self._status_worker = None
         self._tail_worker = None
+        self._support_worker = None
         self._state = "idle"  # idle | starting | running | stopping
+        self._really_quit = False
+        self._build_tray()
 
         QtCore.QTimer.singleShot(0, self._initial_status)
 
@@ -123,6 +126,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.big_btn.setObjectName("primary")
         self.big_btn.clicked.connect(self._on_big_btn)
         lay.addWidget(self.big_btn)
+
+        # 快捷目录 + 支持包
+        quick = QtWidgets.QHBoxLayout()
+        for label, key in (("根目录", "root"), ("输出", "output"), ("输入", "input"),
+                           ("模型", "models"), ("插件", "nodes"), ("日志", "log")):
+            b = QtWidgets.QPushButton(label)
+            b.clicked.connect(lambda _=False, k=key: self._open_quick_dir(k))
+            quick.addWidget(b)
+        quick.addStretch(1)
+        btn_support = QtWidgets.QPushButton("📦 打包支持包")
+        btn_support.clicked.connect(self._make_support_zip)
+        quick.addWidget(btn_support)
+        lay.addLayout(quick)
 
         self.state_label = QtWidgets.QLabel("")
         self.state_label.setObjectName("muted")
@@ -217,6 +233,12 @@ class MainWindow(QtWidgets.QMainWindow):
         if not ok:
             self._set_state("idle", f"状态查询失败: {st.get('error')}")
             return
+        if self._tray is not None:
+            label = "运行中" if st.get("running") else "未运行"
+            if st.get("external"):
+                label += "（外部实例）"
+            self._tray_status.setText(f"状态：{label}")
+            self._tray.setToolTip(f"万道启动台 · {label}")
         if st.get("running"):
             if self._state != "running":
                 self._set_state("running", f"运行中 {st.get('url')}")
@@ -321,11 +343,120 @@ class MainWindow(QtWidgets.QMainWindow):
                 logger.warning("指定浏览器启动失败，退默认: %s", browser, exc_info=True)
         webbrowser.open(url)
 
+    # ---------- 快捷目录 / 支持包 ----------
+
+    def _quick_paths(self) -> dict[str, Path]:
+        try:
+            ctx = build_context(self.store.load())
+            comfy = ctx.comfyui_root / "ComfyUI"
+            return {"root": ctx.comfyui_root, "output": comfy / "output",
+                    "input": comfy / "input", "models": comfy / "models",
+                    "nodes": comfy / "custom_nodes", "log": ctx.comfyui_log}
+        except Exception:
+            logger.debug("快捷目录解析失败（未配置环境？）", exc_info=True)
+            return {}
+
+    def _open_quick_dir(self, key: str) -> None:
+        path = self._quick_paths().get(key)
+        if path is None or not path.exists():
+            QtWidgets.QMessageBox.information(self, "未找到", f"路径不存在：{path or key}")
+            return
+        QtWidgets.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(path)))
+
+    def _make_support_zip(self) -> None:
+        from ..support import build_support_zip
+
+        def job():
+            from ..context import build_context as bc
+            from ..constants import pidfile_path as pfp
+            cfg = self.store.load()
+            path = build_support_zip(bc(cfg), pfp(self.store.config_dir))
+            return {"ok": True, "zip_path": str(path)}
+        self.statusBar().showMessage("打包支持包…")
+        from .workers import FunctionWorker
+        self._support_worker = FunctionWorker(job, self)
+        self._support_worker.finished_sig.connect(self._on_support_done)
+        self._support_worker.start()
+
+    def _on_support_done(self, ok: bool, payload: dict) -> None:
+        if ok:
+            path = payload.get("zip_path", "")
+            self.statusBar().showMessage(f"支持包: {path}", 5000)
+            QtWidgets.QMessageBox.information(self, "支持包已生成", path)
+        else:
+            QtWidgets.QMessageBox.warning(self, "打包失败", str(payload.get("error")))
+
+    # ---------- 系统托盘 ----------
+
+    def _build_tray(self) -> None:
+        self._tray = None
+        if not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        # 程序化生成托盘图标（紫底"万"字），不依赖资源文件
+        from PyQt5 import QtGui
+        pix = QtGui.QPixmap(64, 64)
+        pix.fill(QtGui.QColor("#7f56d9"))
+        painter = QtGui.QPainter(pix)
+        painter.setPen(QtGui.QColor("white"))
+        font = painter.font()
+        font.setPixelSize(40)
+        painter.setFont(font)
+        painter.drawText(pix.rect(), QtCore.Qt.AlignCenter, "万")
+        painter.end()
+        icon = QtGui.QIcon(pix)
+
+        self._tray = QtWidgets.QSystemTrayIcon(icon, self)
+        self._tray.setToolTip("万道启动台")
+        menu = QtWidgets.QMenu()
+        act_show = menu.addAction("显示主窗口")
+        act_show.triggered.connect(self._show_from_tray)
+        self._tray_status = menu.addAction("状态：未知")
+        self._tray_status.setEnabled(False)
+        act_probe = menu.addAction("立即探测")
+        act_probe.triggered.connect(self._poll_once)
+        menu.addSeparator()
+        act_stop_quit = menu.addAction("退出并关闭 ComfyUI")
+        act_stop_quit.triggered.connect(self._quit_with_stop)
+        act_quit = menu.addAction("退出启动台")
+        act_quit.triggered.connect(self._quit_app)
+        self._tray.setContextMenu(menu)
+        self._tray.activated.connect(
+            lambda reason: self._show_from_tray()
+            if reason == QtWidgets.QSystemTrayIcon.DoubleClick else None)
+        self._tray.show()
+
+    def _show_from_tray(self) -> None:
+        self.showNormal()
+        self.activateWindow()
+
+    def _quit_with_stop(self) -> None:
+        self._set_state("stopping", "退出并停止 ComfyUI…")
+        self._stop_worker = StopWorker(self.store, self)
+
+        def on_stopped(ok: bool, res: dict) -> None:
+            self._quit_app()
+        self._stop_worker.finished_sig.connect(on_stopped)
+        self._stop_worker.start()
+
+    def _quit_app(self) -> None:
+        self._really_quit = True
+        self.close()
+        QtWidgets.QApplication.quit()
+
     def closeEvent(self, event) -> None:
+        # 关闭到托盘（偏好开启且非真退出）：藏窗口不退出
+        if (not self._really_quit
+                and self.store.load().get_ui_pref("close_to_tray") == "1"
+                and self._tray is not None):
+            event.ignore()
+            self.hide()
+            return
         self.form.flush()
         self._stop_tail()
         self._poll.stop()
         for worker in (self._status_worker, self._start_worker, self._stop_worker):
             if worker is not None and worker.isRunning():
                 worker.wait(2000)
+        if self._tray is not None:
+            self._tray.hide()
         super().closeEvent(event)

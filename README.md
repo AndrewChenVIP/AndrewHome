@@ -113,3 +113,24 @@ Apache-2.0
 - 启动页顶部队拉快切环境；本启动台实例运行中会拒绝切换（先停止）。
 - 设置页：环境列表新增/复制/删除（至少保留一个）/设激活；深浅主题切换实时生效并持久化。
 - `info --env <id>` 按指定环境解析路径；未知 id 退 1（不再静默回退）。
+
+## 支持包与开机自启（v0.5）
+
+```bash
+python -m wandao_launchpad support            # 打包排障 zip（info+启动器日志+comfyui日志尾部）到配置目录
+```
+
+开机自启（Windows 任务计划，登录后自动拉起 ComfyUI 并等就绪）：
+
+```cmd
+schtasks /Create /TN "WandaoLaunchpad" /SC ONLOGON /TR "C:\...\WandaoLaunchpad.exe start --no-wait"
+schtasks /Delete /TN "WandaoLaunchpad" /F     # 取消
+```
+
+监控存活（每 5 分钟探一次，没跑就拉起）：
+
+```cmd
+schtasks /Create /TN "WandaoLaunchpadWatch" /SC MINUTE /MO 5 /TR "C:\...\WandaoLaunchpad.exe status || C:\...\WandaoLaunchpad.exe start --no-wait"
+```
+
+GUI：关闭窗口可最小化到系统托盘（设置页开关）；托盘菜单含"退出并关闭 ComfyUI"。

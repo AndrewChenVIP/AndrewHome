@@ -80,8 +80,8 @@ class SettingsPage(QtWidgets.QWidget):
         m.addWidget(self.mir_pypi, 2, 1)
         lay.addWidget(mirror_box)
 
-        # ---- 外观 ----
-        look_box = QtWidgets.QGroupBox("外观")
+        # ---- 外观与窗口 ----
+        look_box = QtWidgets.QGroupBox("外观与窗口")
         lk = QtWidgets.QHBoxLayout(look_box)
         lk.addWidget(QtWidgets.QLabel("主题"))
         self.theme_combo = QtWidgets.QComboBox()
@@ -89,6 +89,10 @@ class SettingsPage(QtWidgets.QWidget):
         self.theme_combo.addItem("深色", "dark")
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         lk.addWidget(self.theme_combo)
+        lk.addSpacing(16)
+        self.close_tray_cb = QtWidgets.QCheckBox("关闭窗口时最小化到托盘")
+        self.close_tray_cb.toggled.connect(self._on_close_tray_toggled)
+        lk.addWidget(self.close_tray_cb)
         lk.addStretch(1)
         lay.addWidget(look_box)
 
@@ -134,6 +138,7 @@ class SettingsPage(QtWidgets.QWidget):
         saved_theme = cfg.get_ui_pref("theme", "light")
         ti = self.theme_combo.findData(saved_theme)
         self.theme_combo.setCurrentIndex(max(0, ti))
+        self.close_tray_cb.setChecked(cfg.get_ui_pref("close_to_tray") == "1")
 
     def _selected_env(self, cfg: Config) -> Environment | None:
         row = self.env_list.currentRow()
@@ -234,6 +239,11 @@ class SettingsPage(QtWidgets.QWidget):
     def _on_theme_changed(self, index: int) -> None:
         name = self.theme_combo.itemData(index) or "light"
         self.theme_change_requested.emit(name)   # 应用与持久化由主窗口统一处理
+
+    def _on_close_tray_toggled(self, checked: bool) -> None:
+        cfg = self.store.load()
+        cfg.set_ui_pref("close_to_tray", "1" if checked else "0")
+        self.store.save(cfg)
 
     # ---------- 浏览 ----------
 

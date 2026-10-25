@@ -395,6 +395,20 @@ def cmd_models(args) -> int:
     return ec.EXIT_ERROR
 
 
+def cmd_support(args) -> int:
+    from ..support import build_support_zip
+
+    store = ConfigStore(Path(args.home) if args.home else None)
+    ctx, err = _load_ctx(store, None)
+    if ctx is None:
+        _emit({"ok": False, "error": err}, args.json, f"错误: {err}")
+        return ec.EXIT_ERROR
+    out = Path(args.out) if args.out else None
+    path = build_support_zip(ctx, pidfile_path(store.config_dir), out)
+    _emit({"ok": True, "zip_path": str(path)}, args.json, f"支持包已生成: {path}")
+    return ec.EXIT_OK
+
+
 # ---------- 参数解析 ----------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -460,6 +474,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("models", help="外置模型库（extra_model_paths.yaml）")
     sp.add_argument("action", choices=["list", "import", "validate", "apply"])
     sp.set_defaults(func=cmd_models)
+
+    sp = sub.add_parser("support", help="打包排障支持包（info+日志）为 zip")
+    sp.add_argument("--out", default=None, help="输出 zip 路径（默认配置目录/support-时间戳.zip）")
+    sp.set_defaults(func=cmd_support)
 
     return p
 
