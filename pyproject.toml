@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wandao-launchpad"
-version = "0.1.0"
+version = "0.6.0"
 description = "万道启动台 WandaoLaunchpad —— 万道自研 ComfyUI 启动器（GUI + CLI 同体）"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,6 +13,7 @@ authors = [{ name = "Wandao / 陈守一" }]
 dependencies = [
     "PyQt5>=5.15.9,<5.16",
     "psutil>=5.9",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +21,9 @@ test = ["pytest>=7"]
 
 [project.scripts]
 wandao-launchpad = "wandao_launchpad.__main__:main"
+
+[tool.setuptools]
+packages = ["wandao_launchpad", "wandao_launchpad.cli", "wandao_launchpad.gui"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

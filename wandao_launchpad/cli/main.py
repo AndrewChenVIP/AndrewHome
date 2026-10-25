@@ -488,4 +488,10 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "command", None):
         parser.print_help()
         return ec.EXIT_ERROR
+    # JSON 契约不依赖控制台代码页：英文 Windows 默认 cp1252 编不出中文
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):  # 非 TextIOWrapper（如被 pytest 替换）时跳过
+        pass
     return args.func(args)
