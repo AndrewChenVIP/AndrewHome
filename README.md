@@ -106,7 +106,7 @@ pytest            # 38 项测试：单测 + 假 ComfyUI 生命周期 e2e + 架�
 
 ## License
 
-Apache-2.0
+AGPL-3.0（随仓库主 AndrewHome 初始提交定夺）
 
 ## 多环境与主题（v0.4）
 
