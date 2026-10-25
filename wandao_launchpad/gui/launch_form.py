@@ -24,6 +24,23 @@ class LaunchForm(QtWidgets.QWidget):
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 16)
 
+        # 参数预设行
+        prow = QtWidgets.QHBoxLayout()
+        prow.addWidget(QtWidgets.QLabel("参数预设"))
+        self.preset_combo = QtWidgets.QComboBox()
+        self.preset_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
+        self.preset_combo.activated.connect(self._apply_preset)
+        prow.addWidget(self.preset_combo)
+        btn_save_preset = QtWidgets.QPushButton("存为预设…")
+        btn_save_preset.clicked.connect(self._save_preset_dialog)
+        prow.addWidget(btn_save_preset)
+        btn_del_preset = QtWidgets.QPushButton("删除预设")
+        btn_del_preset.clicked.connect(self._delete_preset_dialog)
+        prow.addWidget(btn_del_preset)
+        prow.addStretch(1)
+        root.addLayout(prow)
+        self._reload_preset_combo()
+
         box1 = QtWidgets.QGroupBox("运行")
         g1 = QtWidgets.QGridLayout(box1)
         g1.addWidget(QtWidgets.QLabel("运行模式"), 0, 0)
@@ -99,7 +116,9 @@ class LaunchForm(QtWidgets.QWidget):
     # ---------- 装载 / 保存 ----------
 
     def reload(self) -> None:
-        opts: LaunchOptions = self.store.load().launch
+        self._fill(self.store.load().launch)
+
+    def _fill(self, opts: LaunchOptions) -> None:
         self._loading = True
         self.mode.setCurrentText(opts.mode)
         self.port.setValue(opts.port)
@@ -114,6 +133,23 @@ class LaunchForm(QtWidgets.QWidget):
         self.open_browser.setChecked(bool(opts.auto_open_browser))
         self.extra_args.setText(opts.extra_args)
         self._loading = False
+
+    def current_options(self) -> LaunchOptions:
+        """从表单控件反读出完整选项（存预设用）。"""
+        o = LaunchOptions()
+        o.mode = self.mode.currentText()
+        o.port = self.port.value()
+        o.listen_lan = self.listen_lan.isChecked()
+        o.vram = self.vram.currentData() or "auto"
+        o.attention = self.attention.currentData() or "auto"
+        o.gpu_index = None if self.gpu.value() < 0 else self.gpu.value()
+        o.fast_fp16_accumulation = self.fast_fp16.isChecked()
+        o.disable_custom_nodes = self.disable_nodes.isChecked()
+        o.auto_open_browser = self.open_browser.isChecked()
+        o.browser_path = self.store.load().launch.browser_path
+        o.extra_args = self.extra_args.text().strip()
+        o.env_vars = self.store.load().launch.env_vars
+        return o
 
     def _touch(self, *_) -> None:
         if not self._loading:
@@ -139,3 +175,52 @@ class LaunchForm(QtWidgets.QWidget):
         if self._debounce.isActive():
             self._debounce.stop()
             self._save_now()
+
+    # ---------- 参数预设 ----------
+
+    def _reload_preset_combo(self) -> None:
+        from ..presets import all_names
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        self.preset_combo.addItem("— 选择预设 —")
+        self.preset_combo.addItems(all_names(self.store.load()))
+        self.preset_combo.blockSignals(False)
+
+    def _apply_preset(self, index: int) -> None:
+        from ..presets import get_preset
+        name = self.preset_combo.itemText(index)
+        opts = get_preset(self.store.load(), name)
+        if opts is None:
+            return
+        self._fill(opts)
+        self.flush()          # 立即落盘，不进防抖
+        self.changed.emit()
+
+    def _save_preset_dialog(self) -> None:
+        from ..presets import save_user_preset
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "存为预设", "预设名称（同名覆盖）：",
+            text=self.preset_combo.currentText()
+            if self.preset_combo.currentIndex() > 0 else "")
+        if not ok or not name.strip():
+            return
+        cfg = self.store.load()
+        save_user_preset(cfg, name.strip(), self.current_options())
+        self.store.save(cfg)
+        self._reload_preset_combo()
+        self.changed.emit()
+
+    def _delete_preset_dialog(self) -> None:
+        from ..presets import delete_user_preset, is_user_preset, all_names
+        cfg = self.store.load()
+        user_names = [n for n in all_names(cfg) if is_user_preset(cfg, n)]
+        if not user_names:
+            QtWidgets.QMessageBox.information(self, "无用户预设", "内置预设不可删除")
+            return
+        name, ok = QtWidgets.QInputDialog.getItem(
+            self, "删除预设", "选择要删除的用户预设：", user_names, 0, False)
+        if not ok:
+            return
+        delete_user_preset(cfg, name)
+        self.store.save(cfg)
+        self._reload_preset_combo()

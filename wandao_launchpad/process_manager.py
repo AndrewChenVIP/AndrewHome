@@ -47,6 +47,7 @@ class StartResult:
     error: str | None = None
     running_env_id: str = ""  # 拒绝启动时：当前占用者的环境 id
     external: bool = False    # 端口被外部实例（非本启动台管理）占用
+    diagnosis: str | None = None  # 未就绪时的日志智能诊断（人话）
 
 
 @dataclass
@@ -136,6 +137,17 @@ class ProcessManager:
         base.elapsed_sec = time.monotonic() - t0
         if not base.ready:
             base.error = f"{wait_timeout:.0f}s 内 /system_stats 未就绪"
+            # 智能诊断（单一实现处：CLI/GUI 共用）——读日志尾部匹配已知模式
+            try:
+                from . import diagnose
+                from .cli.main import _tail_lines
+                log = base.log_path or self.ctx.comfyui_log
+                if Path(log).exists():
+                    text = _tail_lines(Path(log), 200)
+                    base.diagnosis = diagnose.format_diagnosis(
+                        diagnose.diagnose(text), text)
+            except Exception:
+                logger.debug("启动诊断失败", exc_info=True)
             # 不回滚进程：ComfyUI 可能仍在慢启动（模型预热），交给用户决定 stop
         return base
 

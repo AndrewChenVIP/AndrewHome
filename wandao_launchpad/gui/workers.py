@@ -64,12 +64,14 @@ class StartWorker(_Worker):
                 return
             pm = ProcessManager(ctx, pidfile_path(self.store.config_dir))
             res = pm.start(wait_timeout=180.0)
-            self._done(res.started and res.ready, {
+            payload = {
                 "started": res.started, "ready": res.ready, "pid": res.pid,
                 "url": res.url, "error": res.error,
                 "already_running": bool(res.running_env_id),
                 "external": res.external,
-            })
+                "diagnosis": res.diagnosis,
+            }
+            self._done(res.started and res.ready, payload)
         except Exception as exc:  # noqa: BLE001 —— worker 边界必须兜底并上报
             logger.error("StartWorker 异常", exc_info=True)
             self._done(False, {"error": str(exc)})

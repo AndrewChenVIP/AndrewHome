@@ -176,3 +176,57 @@ class ModelPathsService:
                 elif base_ok and not (base / sub).is_dir():
                     problems.append(f"[{lib.name}] 子目录不存在: {sub}")
         return problems
+
+
+_SKIP_EXTS = {".txt", ".json", ".yaml", ".yml"}
+
+
+def scan_installed_models(comfyui_root: Path,
+                          libraries: list[ModelLibrary],
+                          per_type_cap: int = 400) -> dict[str, list[dict]]:
+    """盘点已挂载的模型文件：内置 models/<类型> + 各启用库的映射子目录。
+
+    返回 {类型: [{path, name, size, mtime, source}]}，按修改时间新→旧。
+    """
+    out: dict[str, list[dict]] = {}
+    seen: set[str] = set()
+    base_dirs: list[tuple[str, Path, str]] = []
+
+    builtin = Path(comfyui_root) / "ComfyUI" / "models"
+    if not builtin.is_dir():
+        builtin = Path(comfyui_root) / "models"
+    if builtin.is_dir():
+        for child in sorted(builtin.iterdir()):
+            if child.is_dir():
+                base_dirs.append((child.name, child, "内置"))
+
+    for lib in libraries:
+        if not lib.enabled:
+            continue
+        for sub, typ in lib.mappings.items():
+            base_dirs.append((typ, Path(lib.base_path) / sub, lib.name))
+
+    for typ, d, source in base_dirs:
+        if not d.is_dir():
+            continue
+        bucket = out.setdefault(typ, [])
+        for p in d.rglob("*"):
+            if len(bucket) >= per_type_cap:
+                break
+            try:
+                if not p.is_file() or p.suffix.lower() in _SKIP_EXTS:
+                    continue
+                rp = str(p.resolve())
+                if rp in seen:
+                    continue
+                seen.add(rp)
+                st = p.stat()
+            except OSError:
+                logger.debug("模型文件枚举跳过: %s", p, exc_info=True)
+                continue
+            bucket.append({"path": str(p), "name": p.name,
+                           "size": st.st_size, "mtime": st.st_mtime,
+                           "source": source})
+    for bucket in out.values():
+        bucket.sort(key=lambda x: x["mtime"], reverse=True)
+    return out

@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import logging
+import time
 import webbrowser
+from pathlib import Path
 
 from PyQt5 import QtCore, QtWidgets
 
@@ -21,7 +23,8 @@ from .workers import LogTailWorker, StartWorker, StatusWorker, StopWorker
 logger = logging.getLogger(__name__)
 
 NAV_ITEMS = [("🚀 启动", "launch"), ("📋 日志", "logs"), ("🧩 插件", "plugins"),
-             ("🧬 内核", "kernel"), ("📂 模型库", "models"), ("📤 归档", "archive"),
+             ("🧬 内核", "kernel"), ("📂 模型库", "models"), ("🗃 模型", "mbrowse"),
+             ("📤 归档", "archive"),
              ("⚙️ 设置", "settings"), ("ℹ️ 关于", "about")]
 
 
@@ -32,6 +35,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(f"万道启动台 WandaoLaunchpad v{__version__}")
         self.resize(1000, 680)
         self.setMinimumSize(920, 640)
+        self._restore_geometry()
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -71,19 +75,21 @@ class MainWindow(QtWidgets.QMainWindow):
         from .kernel_page import KernelPage
         from .models_page import ModelsPage
         from .archive_page import ArchivePage
+        from .models_browse_page import ModelsBrowsePage
         status = self.statusBar().showMessage
         self.plugins_page = PluginsPage(store, status_cb=lambda m: status(m, 5000))
         self.kernel_page = KernelPage(store, status_cb=lambda m: status(m, 5000))
         self.models_page = ModelsPage(store, status_cb=lambda m: status(m, 5000))
         self.archive_page = ArchivePage(store, status_cb=lambda m: status(m, 5000))
+        self.mbrowse_page = ModelsBrowsePage(store, status_cb=lambda m: status(m, 5000))
         self.settings_page = SettingsPage(store)
         self.settings_page.saved.connect(self._on_settings_saved)
         self.settings_page.theme_change_requested.connect(self._apply_theme)
         self.settings_page.auto_archive_toggled.connect(self._set_auto_archive)
         self.about_page = self._build_about_page()
         for page in (self.launch_page, self.log_page, self.plugins_page,
-                     self.kernel_page, self.models_page, self.archive_page,
-                     self.settings_page, self.about_page):
+                     self.kernel_page, self.models_page, self.mbrowse_page,
+                     self.archive_page, self.settings_page, self.about_page):
             self.stack.addWidget(page)
 
         self._loaded_pages: set[int] = set()
@@ -116,7 +122,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if row not in self._loaded_pages:
             self._loaded_pages.add(row)
             page = self.stack.widget(row)
-            if page in (self.plugins_page, self.kernel_page, self.archive_page):
+            if page in (self.plugins_page, self.kernel_page, self.archive_page,
+                        self.mbrowse_page):
                 page.reload()
 
     # ---------- 启动页 ----------
@@ -299,6 +306,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if self._state == "running":
                 self._set_state("idle", "ComfyUI 已退出")
                 self._stop_tail()
+                self._diagnose_exit()
 
     # ---------- 启停 ----------
 
@@ -332,8 +340,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_state("running", f"已有实例在跑（env={res.get('already_running')}）")
             self._start_tail(self._current_log_path())
         else:
-            self._set_state("idle", f"启动失败: {res.get('error')}")
-            QtWidgets.QMessageBox.warning(self, "启动失败", str(res.get("error")))
+            diag_text = res.get("diagnosis", "")
+            detail = res.get("error", "")
+            if diag_text:
+                self._set_state("idle", "启动失败（已诊断，见弹窗）")
+                QtWidgets.QMessageBox.warning(self, "启动失败 · 诊断", diag_text)
+            else:
+                self._set_state("idle", f"启动失败: {detail}")
+                QtWidgets.QMessageBox.warning(self, "启动失败", str(detail))
 
     def _do_stop(self) -> None:
         self._set_state("stopping", "正在停止…")
@@ -534,6 +548,11 @@ class MainWindow(QtWidgets.QMainWindow):
         act_probe = menu.addAction("立即探测")
         act_probe.triggered.connect(self._poll_once)
         menu.addSeparator()
+        act_archive = menu.addAction("📥 归档全部新增（图像）")
+        act_archive.triggered.connect(self._tray_archive_new)
+        act_latest = menu.addAction("🖼 打开最新出图")
+        act_latest.triggered.connect(self._tray_open_latest)
+        menu.addSeparator()
         act_stop_quit = menu.addAction("退出并关闭 ComfyUI")
         act_stop_quit.triggered.connect(self._quit_with_stop)
         act_quit = menu.addAction("退出启动台")
@@ -562,6 +581,121 @@ class MainWindow(QtWidgets.QMainWindow):
         self.close()
         QtWidgets.QApplication.quit()
 
+    # ---------- 诊断 / 托盘快捷项 / 窗口几何 ----------
+
+    def _diagnose_exit(self) -> None:
+        """ComfyUI 意外退出：抓日志尾部做诊断，托盘气泡报结论。"""
+        from .. import diagnose
+        from .workers import FunctionWorker
+
+        def job():
+            try:
+                from ..cli.main import _tail_lines
+                text = _tail_lines(Path(self._current_log_path()), 200)                     if self._current_log_path() else ""
+            except Exception:
+                logger.debug("退出诊断读日志失败", exc_info=True)
+                text = ""
+            items = diagnose.diagnose(text)
+            return {"ok": True, "items": items, "text": text}
+        self._diag_worker = FunctionWorker(job, self)
+        self._diag_worker.finished_sig.connect(self._on_exit_diagnosed)
+        self._diag_worker.start()
+
+    def _on_exit_diagnosed(self, ok: bool, payload: dict) -> None:
+        if self._tray is None:
+            return
+        items = payload.get("items", []) if ok else []
+        if items:
+            from .. import diagnose
+            self._tray.showMessage(
+                "ComfyUI 已退出 · 诊断",
+                diagnose.format_diagnosis(items)[:220],
+                QtWidgets.QSystemTrayIcon.Warning, 8000)
+        else:
+            self._tray.showMessage(
+                "ComfyUI 已退出", "未见已知错误模式，详情用「🩺 体检」或支持包排查",
+                QtWidgets.QSystemTrayIcon.Information, 5000)
+
+    def _tray_archive_new(self) -> None:
+        from ..archive import IMAGE_EXTS, archive_files, list_recent_outputs, output_dir_of
+        from .workers import FunctionWorker
+
+        def job():
+            cfg = self.store.load()
+            ctx = build_context(cfg)
+            target = cfg.get_ui_pref("archive_target", "")
+            if not target:
+                return {"ok": False, "error": "未配置图像归档落点（设置页）"}
+            try:
+                last = float(cfg.get_ui_pref("last_archive_at", "0"))
+            except ValueError:
+                last = 0.0
+            fresh = [i for i in list_recent_outputs(
+                output_dir_of(ctx.comfyui_root), exts=IMAGE_EXTS)
+                if i["mtime"] > last]
+            if not fresh:
+                return {"ok": True, "copied": 0, "skipped": 0, "failed": 0,
+                        "note": "无新增"}
+            result = archive_files(fresh, target)
+            if result["copied"]:
+                cfg.set_ui_pref("last_archive_at", str(time.time()))
+                self.store.save(cfg)
+            return {"ok": not result["failed"], **{k: len(v) for k, v in result.items()
+                                                   if isinstance(v, list)}}
+        self.statusBar().showMessage("归档全部新增…")
+        self._tarch_worker = FunctionWorker(job, self)
+        self._tarch_worker.finished_sig.connect(self._on_tray_archived)
+        self._tarch_worker.start()
+
+    def _on_tray_archived(self, ok: bool, payload: dict) -> None:
+        if self._tray is None:
+            return
+        if not ok and "error" in payload:
+            self._tray.showMessage("归档失败", payload["error"],
+                                   QtWidgets.QSystemTrayIcon.Warning, 4000)
+            return
+        if payload.get("note"):
+            self._tray.showMessage("归档", "没有新增图像",
+                                   QtWidgets.QSystemTrayIcon.Information, 2500)
+            return
+        self._tray.showMessage(
+            "归档完成",
+            f"新增 {payload.get('copied', 0)}，跳过 {payload.get('skipped', 0)}，"
+            f"失败 {payload.get('failed', 0)}",
+            QtWidgets.QSystemTrayIcon.Information, 3000)
+
+    def _tray_open_latest(self) -> None:
+        from ..archive import IMAGE_EXTS, VIDEO_EXTS, list_recent_outputs, output_dir_of
+        try:
+            ctx = build_context(self.store.load())
+            out = output_dir_of(ctx.comfyui_root)
+            items = list_recent_outputs(out, limit=1,
+                                        exts=IMAGE_EXTS | VIDEO_EXTS)
+            if items:
+                QtWidgets.QDesktopServices.openUrl(
+                    QtCore.QUrl.fromLocalFile(items[0]["path"]))
+            else:
+                self.statusBar().showMessage("output 目录还没有产出", 3000)
+        except Exception as exc:  # noqa: BLE001 —— 快捷项失败只提示
+            logger.warning("打开最新出图失败", exc_info=True)
+            self.statusBar().showMessage(f"打开失败: {exc}", 3000)
+
+    def _restore_geometry(self) -> None:
+        raw = self.store.load().get_ui_pref("window_geometry", "")
+        try:
+            x, y, w, h = (int(v) for v in raw.split(","))
+            w = max(920, min(w, 3840))
+            h = max(640, min(h, 2160))
+            self.setGeometry(x, y, w, h)
+        except (ValueError, TypeError):
+            logger.debug("窗口几何恢复跳过", exc_info=True)
+
+    def _save_geometry(self) -> None:
+        g = self.geometry()
+        cfg = self.store.load()
+        cfg.set_ui_pref("window_geometry", f"{g.x()},{g.y()},{g.width()},{g.height()}")
+        self.store.save(cfg)
+
     def closeEvent(self, event) -> None:
         # 关闭到托盘（偏好开启且非真退出）：藏窗口不退出
         if (not self._really_quit
@@ -582,4 +716,5 @@ class MainWindow(QtWidgets.QMainWindow):
                 worker.wait(2000)
         if self._tray is not None:
             self._tray.hide()
+        self._save_geometry()
         super().closeEvent(event)

@@ -58,6 +58,7 @@ def cmd_start(args) -> int:
         "log_path": res.log_path, "error": res.error,
         "running_env_id": res.running_env_id or None,
         "external": res.external,
+        "diagnosis": res.diagnosis,
     }
     if res.started and (res.ready or args.no_wait):
         _emit(payload, args.json, f"已启动: {res.url} (PID={res.pid})")
@@ -66,7 +67,10 @@ def cmd_start(args) -> int:
         who = f"env={res.running_env_id}" if res.running_env_id else "外部实例"
         _emit(payload, args.json, f"已在跑（{who}），拒绝重复启动")
         return ec.EXIT_ALREADY_RUNNING
-    _emit(payload, args.json, f"启动失败: {res.error}")
+    msg = f"启动失败: {res.error}"
+    if res.diagnosis:
+        msg += "\n" + res.diagnosis
+    _emit(payload, args.json, msg)
     return ec.EXIT_ERROR
 
 
