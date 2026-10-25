@@ -1,52 +1,41 @@
-# AGENTS.md — 给 AI agent 的操作契约
+# AGENTS.md — 万道启动台 WandaoLaunchpad（给接任 Agent 的第一站）
 
-## 这是什么
+万道自研 ComfyUI 启动器：**只做编排器不分叉内核**。当前 **v0.10.0**（2026-10-26 阶段性收官，
+104/104 测试全绿，HEAD 见 git log）。完整入口：`docs/交接文档-v0.10.0.md`。
 
-万道启动台（WandaoLaunchpad）：万道自研 ComfyUI 启动器，PyQt5 GUI + headless CLI 同体。
-对标分析对象是 Mie 启动器（NAS 05Agent工具库\02开源工具\ComfyUI-Mie-Package-Launcher，
-分析报告见 08Agent归档中心 2026-10-26 两份）——本项目是"吸取其教训从零重写"的产物。
-
-## agent 怎么用
+## 常用命令（逐条可复制）
 
 ```bash
-python -m wandao_launchpad status --json   # 判断在不在跑：0=在跑 3=未跑 1=异常
-python -m wandao_launchpad start           # 阻塞到就绪；已在跑/端口被占退 2
-python -m wandao_launchpad stop            # 幂等；作用于当前在跑的实例
-python -m wandao_launchpad info --json     # 看生效配置，不启动任何东西
-python -m wandao_launchpad logs comfyui -n 100   # 务必默认 no-follow（-f 会阻塞）
-python -m wandao_launchpad plugins list --json   # 插件目录扫描（纯本地，快）
-python -m wandao_launchpad kernel info --json    # 内核版本+提交+脏树标记
+pip install -e .[test]                                  # 装依赖（含 pytest）
+pytest                                                  # 全量测试（必须全绿才许提交）
+python -m wandao_launchpad gui                          # 图形界面
+python -m wandao_launchpad status --json                # 0=在跑 1=异常 3=未跑
+python -m wandao_launchpad start / stop / restart       # 启停（失败自动附 diagnosis）
+python -m wandao_launchpad plugins list|search|install|check-updates|update-all
+python -m wandao_launchpad kernel info|update --sync-deps|log|checkout
+python -m wandao_launchpad models list|import|validate|apply
+python -m wandao_launchpad doctor [--quick]             # 八项体检
+python -m wandao_launchpad archive list|run [--all --dry-run]
+python -m wandao_launchpad support --out xx.zip         # 排障支持包
+python scripts/build.py                                 # 打包 → dist/（onedir 64MB）
 ```
 
-- `plugins check-updates` 走 git 网络（并行 8 worker），慢网络下耐心等，别并发重复调。
-- `kernel update` / `kernel checkout --yes` 在 ComfyUI 运行中或内核树脏时直接拒绝——这是保护，别绕过。
-- 危险操作有确认位：`plugins uninstall NAME --yes`、`kernel checkout REF --yes`。
-- `kernel update` 已是最新时退 **4**（不是错误）。
+## 目录地图
 
-- 按**退出码 + 单行 JSON** 分支，不要正则匹配人类文案。
-- `status` 的 `running` 看**端口真相**（/system_stats 应答）；`external:true` 表示服务在跑但不受本启动台管理——此时 **stop 不会杀它**，别反复重试。
-- `start` 遇端口被外部实例占用时退 2 + `external:true`；要接管先让外部实例自己停。
-- 退出码定义在 `wandao_launchpad/cli/exitcodes.py`，语义冻结。
-- 配置目录：环境变量 `WANDAO_LAUNCHPAD_HOME` 或默认 `<项目>/launchpad/`（含本机绝对路径，**禁止提交进 git**）。
+- `wandao_launchpad/` 核心层（config/models/context/pidfile/process_manager/probe/pipx/
+  plugins/kernel/model_paths/diagnose/presets/archive/autostart/support）——**禁 import PyQt5**
+- `wandao_launchpad/cli/` 子命令 + exitcodes 契约；`wandao_launchpad/gui/` PyQt5 界面
+- `tests/` 104 项（单测 + 假 ComfyUI 生命周期 e2e + 架构守卫）；`scripts/` build 与假 ComfyUI
 
-## 改代码前必读（本项目六条铁律，tests/test_arch_guard.py 有守卫）
+## 铁律（tests/test_arch_guard.py 有守卫，违反即红灯）
 
-1. **core 层禁止 import PyQt5**——UI 依赖只许出现在 `gui/`。
-2. **禁止裸 `except: pass`**——吞异常必须留日志（至少 logger.debug）。
-3. **同一逻辑只留一份实现**——pidfile/配置读写/旗标映射/版本解析各只有一处正本。
-4. **杀进程永远定点、单次、验尸**——禁止按端口扫描杀、禁止重复补刀、禁止静默提权。
-5. **主线程零重活**——子进程/网络/大文件一律进 worker 线程；UI 只收信号。
-6. **AppContext 是唯一共享上下文**——服务函数只收入参/AppContext，不许摸 UI 对象，
-   不许给 headless 造"属性镜像替身"（Mie 的 HeadlessAppContext 漂移教训）。
+1. core 层禁 import PyQt5；2. 禁裸 `except: pass`（吞异常必须留日志）；
+3. 同一逻辑只留一份实现；4. 杀进程定点单次验尸，禁按端口扫射、禁静默提权；
+5. 主线程零重活（子进程/网络/大文件全进 worker）；6. AppContext 唯一共享上下文，
+服务函数不许摸 UI 对象。另：**pip 永不触碰 torch/torchvision/torchaudio/triton**
+（CUDA 冻结保护，pipx.FROZEN_PKGS）；测试端口用 18999 避让真机 8188。
 
-## 常见坑
+## 重启路径
 
-- `logs -f` 永久阻塞，自动化禁用。
-- `start` 已在跑时退 2 并返回 `running_env_id`——先 `stop` 再动。
-- 配置文件里 `launch.extra_args` 原样追加到命令行（shlex posix=False，Windows 路径安全）。
-- 旗标映射（显存/注意力→ComfyUI 参数）只在 `command_builder.py`，改映射同步改测试。
-
-## 测试
-
-`pytest` 全绿才许收工；生命周期 e2e 用 `scripts/fake_comfyui.py` 当假 ComfyUI，
-不碰真实安装。
+1. `pytest` 全绿确认环境 → 2. 读 `docs/交接文档-v0.10.0.md` → 3. 按其第 6 节技术债清单选题
+→ 4. 沿用"红绿循环 + GUI offscreen 冒烟 + 版本三处同步（__init__/pyproject/README）"工作法。
