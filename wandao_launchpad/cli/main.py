@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -19,6 +20,8 @@ from ..constants import pidfile_path
 from ..context import build_context
 from ..process_manager import ProcessManager
 from . import exitcodes as ec
+
+logger = logging.getLogger(__name__)
 
 
 def _emit(payload: dict, as_json: bool, human: str | None = None) -> None:
@@ -492,6 +495,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):  # 非 TextIOWrapper（如被 pytest 替换）时跳过
-        pass
+    except (AttributeError, OSError):
+        logger.debug("stdout 重配置跳过（非 TextIOWrapper 或不可重配）", exc_info=True)
     return args.func(args)
