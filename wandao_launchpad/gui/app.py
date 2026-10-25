@@ -13,7 +13,7 @@ def run_gui(argv: list[str] | None = None) -> int:
     from .main_window import MainWindow
 
     app = QtWidgets.QApplication(argv or sys.argv[:1])
-    theme.set_theme("light")
+    theme.set_theme(ConfigStore().load().get_ui_pref("theme", "light"))
     app.setStyleSheet(theme.build_qss())
     win = MainWindow(ConfigStore())
     win.show()

@@ -62,6 +62,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.models_page = ModelsPage(store, status_cb=lambda m: status(m, 5000))
         self.settings_page = SettingsPage(store)
         self.settings_page.saved.connect(self._on_settings_saved)
+        self.settings_page.theme_change_requested.connect(self._apply_theme)
         self.about_page = self._build_about_page()
         for page in (self.launch_page, self.log_page, self.plugins_page,
                      self.kernel_page, self.models_page, self.settings_page,
@@ -106,11 +107,12 @@ class MainWindow(QtWidgets.QMainWindow):
         head = QtWidgets.QHBoxLayout()
         title = QtWidgets.QLabel("ComfyUI 一键启动")
         title.setObjectName("title")
-        self.env_label = QtWidgets.QLabel("")
-        self.env_label.setObjectName("muted")
+        self.env_combo = QtWidgets.QComboBox()
+        self.env_combo.setMinimumWidth(220)
+        self.env_combo.currentIndexChanged.connect(self._on_env_switched)
         head.addWidget(title)
         head.addStretch(1)
-        head.addWidget(self.env_label)
+        head.addWidget(self.env_combo)
         lay.addLayout(head)
 
         self.form = LaunchForm(self.store)
@@ -166,10 +168,39 @@ class MainWindow(QtWidgets.QMainWindow):
     def _refresh_env_label(self) -> None:
         try:
             cfg = self.store.load()
-            ctx = build_context(cfg)
-            self.env_label.setText(f"{ctx.env.name}  ·  {ctx.env.comfyui_root}")
+            self.env_combo.blockSignals(True)
+            self.env_combo.clear()
+            for env in cfg.environments:
+                self.env_combo.addItem(env.name or env.id, env.id)
+            idx = self.env_combo.findData(cfg.active_env_id)
+            self.env_combo.setCurrentIndex(max(0, idx))
+            self.env_combo.blockSignals(False)
         except Exception:
-            self.env_label.setText("未配置环境 → 去「设置」填写")
+            logger.warning("环境列表刷新失败", exc_info=True)
+
+    def _on_env_switched(self, index: int) -> None:
+        env_id = self.env_combo.itemData(index)
+        if not env_id:
+            return
+        cfg = self.store.load()
+        if env_id == cfg.active_env_id:
+            return
+        # 护栏：本启动台管理的实例在跑时不切（pidfile 定点判断，不误伤外部实例）
+        from .. import pidfile as pf
+        from ..constants import pidfile_path
+        rec = pf.read(pidfile_path(self.store.config_dir))
+        if rec and pf.is_alive(rec):
+            QtWidgets.QMessageBox.warning(
+                self, "先停止再切换",
+                f"环境「{rec.env_id}」的 ComfyUI 还在跑（PID={rec.pid}）。\n"
+                "先停止当前实例，再切换环境。")
+            self._refresh_env_label()
+            return
+        cfg.active_env_id = env_id
+        self.store.save(cfg)
+        self._refresh_env_label()
+        self._poll_once()
+        self.statusBar().showMessage(f"已切换到环境: {env_id}", 3000)
 
     def _initial_status(self) -> None:
         self._refresh_env_label()
@@ -215,7 +246,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_state("running", f"运行中 {res.get('url')} (PID={res.get('pid')})")
             self._start_tail(self._current_log_path())
             if self._want_browser():
-                webbrowser.open(res.get("url", "http://127.0.0.1:8188"))
+                self._open_browser(res.get("url", "http://127.0.0.1:8188"))
         elif res.get("already_running"):
             self._set_state("running", f"已有实例在跑（env={res.get('already_running')}）")
             self._start_tail(self._current_log_path())
@@ -269,8 +300,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self.form.reload()
         self.statusBar().showMessage("设置已保存", 2000)
 
+    def _apply_theme(self, name: str) -> None:
+        from . import theme
+        theme.set_theme(name)
+        QtWidgets.QApplication.instance().setStyleSheet(theme.build_qss())
+        # 持久化在唯一写入方这里（设置页只发信号）
+        cfg = self.store.load()
+        cfg.set_ui_pref("theme", name)
+        self.store.save(cfg)
+        self.statusBar().showMessage(f"主题已切换: {'深色' if name == 'dark' else '浅色'}", 2000)
+
+    def _open_browser(self, url: str) -> None:
+        browser = self.store.load().launch.browser_path.strip()
+        if browser:
+            import subprocess
+            try:
+                subprocess.Popen([browser, url])
+                return
+            except OSError:
+                logger.warning("指定浏览器启动失败，退默认: %s", browser, exc_info=True)
+        webbrowser.open(url)
+
     def closeEvent(self, event) -> None:
         self.form.flush()
         self._stop_tail()
         self._poll.stop()
+        for worker in (self._status_worker, self._start_worker, self._stop_worker):
+            if worker is not None and worker.isRunning():
+                worker.wait(2000)
         super().closeEvent(event)

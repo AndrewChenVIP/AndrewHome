@@ -82,6 +82,21 @@ class Config:
                 return env
         return None
 
+    # ---------- UI 偏好（存 _extras["ui"]，配置文件里的人读区） ----------
+
+    def get_ui_pref(self, key: str, default: str = "") -> str:
+        ui = self._extras.get("ui")
+        if isinstance(ui, dict):
+            return str(ui.get(key, default))
+        return default
+
+    def set_ui_pref(self, key: str, value: str) -> None:
+        ui = self._extras.get("ui")
+        if not isinstance(ui, dict):
+            ui = {}
+            self._extras["ui"] = ui
+        ui[key] = value
+
     def to_dict(self) -> dict:
         data = dict(self._extras)
         data.update(

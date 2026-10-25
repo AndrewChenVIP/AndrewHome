@@ -12,6 +12,16 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
+@pytest.fixture(scope="session")
+def qapp():
+    """共享一个 offscreen QApplication（未装 pytest-qt，自建）。"""
+    from PyQt5 import QtWidgets
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        app = QtWidgets.QApplication([])
+    yield app
+
+
 @pytest.fixture()
 def home(tmp_path) -> Path:
     """独立配置目录：每个测试自成一个世界。"""

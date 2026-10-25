@@ -121,13 +121,26 @@ def cmd_info(args) -> int:
     store = ConfigStore(Path(args.home) if args.home else None)
     cfg = store.load()
     active = cfg.active_env()
+    resolved_root = active.comfyui_root if active else None
+    resolved_py = active.python_path if active else None
+    env_note = "active"
+    if getattr(args, "env", None):
+        try:
+            from ..context import build_context
+            ctx = build_context(cfg, args.env)
+            resolved_root, resolved_py = ctx.env.comfyui_root, ctx.env.python_path
+            env_note = f"--env={args.env}"
+        except LookupError as exc:
+            _emit({"ok": False, "error": str(exc)}, args.json, f"错误: {exc}")
+            return ec.EXIT_ERROR
     payload = {
         "launcher_version": __version__,
         "schema_version": cfg.schema_version,
         "active_env_id": cfg.active_env_id,
         "environments": [e.to_dict() for e in cfg.environments],
-        "comfyui_root": active.comfyui_root if active else None,
-        "python_path": active.python_path if active else None,
+        "comfyui_root": resolved_root,
+        "python_path": resolved_py,
+        "resolved_from": env_note,
         "port": cfg.launch.port,
         "launch": cfg.launch.to_dict(),
         "mirrors": cfg.mirrors.to_dict(),
