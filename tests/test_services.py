@@ -201,6 +201,82 @@ def test_kernel_stable_tag_and_checkout(tmp_path):
     assert plan["updated"] is True and plan["to"] == "v0.42.0"
 
 
+# ================= 搜索与安装 =================
+
+_NODE_LIST_JSON = [
+    {"title": "ComfyUI KJ Nodes", "description": "Bunch of nodes",
+     "reference": "https://github.com/kijai/ComfyUI-KJNodes",
+     "installed_ver": [{"type": "git-clone", "id": "https://github.com/kijai/ComfyUI-KJNodes"}]},
+    {"title": "Impact Pack", "description": "detector stuff",
+     "reference": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
+     "installed_ver": [{"type": "git-clone", "id": "https://github.com/ltdrdata/ComfyUI-Impact-Pack"}]},
+    {"title": "Video Helpers", "description": "VHS video suite for kj",
+     "reference": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+     "installed_ver": [{"type": "git-clone", "id": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite"}]},
+]
+
+
+def _svc_with_local_list(tmp_path, monkeypatch):
+    import wandao_launchpad.plugins as plugins_mod
+
+    list_file = tmp_path / "node_list.json"
+    list_file.write_text(json.dumps(_NODE_LIST_JSON), encoding="utf-8")
+    monkeypatch.setattr(plugins_mod, "NODE_LIST_URL", list_file.as_uri())
+    cn = tmp_path / "custom_nodes"
+    cn.mkdir(exist_ok=True)
+    return PluginService(cn, cache_dir=tmp_path / "cache")
+
+
+def test_search_ranking_and_cache(tmp_path, monkeypatch):
+    import wandao_launchpad.plugins as plugins_mod
+
+    svc = _svc_with_local_list(tmp_path, monkeypatch)
+    hits = svc.search("kj")
+    names = [e.name for e in hits]
+    assert "ComfyUI KJ Nodes" in names        # 名字命中
+    assert "Video Helpers" in names           # 描述命中
+    assert names.index("ComfyUI KJ Nodes") < names.index("Video Helpers")  # 名字命中排前
+    assert (tmp_path / "cache" / "node_list_cache.json").exists()
+    # 缓存生效：清单源改坏后仍能搜（1h TTL 内走缓存）
+    monkeypatch.setattr(plugins_mod, "NODE_LIST_URL",
+                        (tmp_path / "nope.json").as_uri())
+    assert svc.search("impact")
+
+
+def test_install_from_local_git_url(tmp_path):
+    cn = tmp_path / "custom_nodes"
+    cn.mkdir()
+    origin, _ = _make_repo_with_remote(tmp_path, "AwesomePlugin")
+    svc = PluginService(cn, cache_dir=tmp_path / "cache")
+    info = svc.install(str(origin))          # 本地路径当 URL：无网络 clone
+    assert info.name == "AwesomePlugin" and info.is_git and info.enabled
+    assert (cn / "AwesomePlugin" / ".git").exists()
+
+    # 重复安装 → FileExistsError
+    with pytest.raises(FileExistsError):
+        svc.install(str(origin))
+
+
+def test_install_failure_cleans_up(tmp_path):
+    cn = tmp_path / "custom_nodes"
+    cn.mkdir()
+    svc = PluginService(cn, cache_dir=tmp_path / "cache")
+    with pytest.raises(RuntimeError):
+        svc.install(str(tmp_path / "no-such-repo"))   # clone 必败
+    # 不留半拉子目录
+    assert list(cn.iterdir()) == []
+
+
+def test_install_by_name_resolves_list(tmp_path, monkeypatch):
+    svc = _svc_with_local_list(tmp_path, monkeypatch)
+    # 拦下真实 clone：换成本地仓库 URL
+    origin, _ = _make_repo_with_remote(tmp_path, "resolved")
+    monkeypatch.setattr(svc, "_proxied", lambda url: str(origin))
+    info = svc.install("Impact Pack")
+    # 目录名取自清单 URL 尾段（规范名），内容来自被拦下的本地仓库
+    assert info.name == "ComfyUI-Impact-Pack" and info.is_git
+
+
 # ================= ModelPathsService =================
 
 def test_models_sidecar_roundtrip_and_scan(tmp_path):

@@ -54,6 +54,25 @@ python -m wandao_launchpad models apply              # sidecar 渲染 yaml（旧
 - 插件启停沿用 ComfyUI-Manager 的 `.disabled` 目录后缀约定。
 - 模型库唯一真源是 sidecar（`launchpad/model_libs.json`），yaml 是渲染产物；路径含 `#`/中文/空格都由 PyYAML 保证不坏。
 
+## 插件搜索与安装（v0.3）
+
+```bash
+python -m wandao_launchpad plugins search animate    # 搜官方 custom-node-list（1h 缓存，直连失败自动走代理）
+python -m wandao_launchpad plugins install ComfyUI-KJNodes   # 按名安装（清单解析）
+python -m wandao_launchpad plugins install https://github.com/xxx/yyy  # 或直接 git URL
+```
+
+## 打包（v0.3）
+
+```bash
+pip install pyinstaller
+python scripts/build.py       # → dist/WandaoLaunchpad/（onedir，裁剪后约 64MB）+ dist/万道启动台.cmd
+```
+
+- onedir 而非 onefile（onefile 每次启动解压慢——Mie 113MB 的教训）。
+- 体积裁剪：Mesa 软渲染 DLL（20MB）、Qt Quick/Qml 系、翻译文件全砍（对标分析同款冗余）。
+- 便携原则：配置目录跟 exe 走（`WandaoLaunchpad/launchpad/`），exe 放哪配置在哪。
+
 > **端口真相原则**：status 以 `/system_stats` 是否应答判断"在跑"，以 pidfile 判断"是不是我们起的"。
 > 外部实例（别的启动器/手动启动）在跑时 status 如实上报（`external:true`），stop **绝不会**杀它。
 

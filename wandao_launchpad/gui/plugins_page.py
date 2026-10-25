@@ -35,7 +35,8 @@ class PluginsPage(QtWidgets.QWidget):
 
         bar = QtWidgets.QHBoxLayout()
         for text, fn in (("刷新", self.reload), ("检查更新", self.check_updates),
-                         ("更新全部", self.update_all)):
+                         ("更新全部", self.update_all),
+                         ("🔍 搜索安装…", self.search_install)):
             b = QtWidgets.QPushButton(text)
             b.clicked.connect(fn)
             bar.addWidget(b)
@@ -59,8 +60,12 @@ class PluginsPage(QtWidgets.QWidget):
     # ---------- 基础 ----------
 
     def _svc(self) -> PluginService:
-        ctx = build_context(self.store.load())
-        return PluginService(ctx.comfyui_root / "ComfyUI" / "custom_nodes")
+        cfg = self.store.load()
+        from ..context import build_context
+        ctx = build_context(cfg)
+        return PluginService(ctx.comfyui_root / "ComfyUI" / "custom_nodes",
+                             cache_dir=self.store.config_dir,
+                             github_proxy=cfg.mirrors.github_proxy)
 
     def _run(self, fn, on_done):
         self._worker = FunctionWorker(fn, self)
@@ -105,6 +110,29 @@ class PluginsPage(QtWidgets.QWidget):
                 for idx in self.table.selectionModel().selectedRows()]
 
     # ---------- 动作 ----------
+
+    def search_install(self) -> None:
+        """搜索官方插件清单并安装（输入 git URL 则直接 clone）。"""
+        text, ok = QtWidgets.QInputDialog.getText(
+            self, "搜索安装插件",
+            "输入插件名（搜官方清单）或 git URL：")
+        if not ok or not text.strip():
+            return
+        target = text.strip()
+        label = target if target.startswith("http") else f"名称「{target}」匹配的插件"
+
+        def job():
+            return {"ok": True, "plugin": self._svc().install(target).__dict__}
+        self.status_cb(f"安装 {label}（clone 走网络，稍候）…")
+        self._run(job, lambda ok_, p: self._on_installed(p, ok_))
+
+    def _on_installed(self, payload: dict, ok: bool) -> None:
+        if ok:
+            self.status_cb(f"已安装 {payload.get('plugin', {}).get('dir_name')}")
+        else:
+            QtWidgets.QMessageBox.warning(self, "安装失败", str(payload.get("error")))
+            self.status_cb(f"安装失败: {payload.get('error')}")
+        self.reload()
 
     def check_updates(self) -> None:
         def job():

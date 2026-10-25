@@ -11,7 +11,7 @@ APP_ID = "WandaoLaunchpad"
 # --- 进程生命周期 ---
 DEFAULT_PORT = 8188
 PROBE_TIMEOUT_SEC = 3.0        # 单次 /system_stats 探测超时
-START_READY_TIMEOUT_SEC = 60.0 # start 阻塞等待就绪的上限
+START_READY_TIMEOUT_SEC = 180.0  # start 阻塞等待就绪上限（重型插件包冷启动远超 60s）
 STOP_GRACEFUL_SEC = 10.0       # 优雅终止等待
 STOP_FORCE_WAIT_SEC = 5.0      # 强杀后确认等待
 
@@ -35,6 +35,10 @@ def default_config_dir() -> Path:
     env = os.environ.get("WANDAO_LAUNCHPAD_HOME")
     if env:
         return Path(env)
+    # 冻结模式（PyInstaller）：配置跟 exe 走（便携）；源码模式：跟项目根走
+    import sys
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "launchpad"
     return Path(__file__).resolve().parent.parent / "launchpad"
 
 

@@ -210,7 +210,8 @@ def cmd_plugins(args) -> int:
     if ctx is None:
         _emit({"ok": False, "error": err}, args.json, f"错误: {err}")
         return ec.EXIT_ERROR
-    svc = PluginService(_custom_nodes_dir(ctx))
+    svc = PluginService(_custom_nodes_dir(ctx), cache_dir=store.config_dir,
+                        github_proxy=ctx.config.mirrors.github_proxy)
 
     try:
         if args.action == "list":
@@ -219,6 +220,25 @@ def cmd_plugins(args) -> int:
                        "plugins": [p.__dict__ for p in items]}
             _emit(payload, args.json, f"{len(items)} 个插件（git {sum(1 for p in items if p.is_git)}"
                                        f"，停用 {sum(1 for p in items if not p.enabled)}）")
+            return ec.EXIT_OK
+        if args.action == "search":
+            query = args.query or args.extra or args.name or ""
+            entries = svc.search(query)
+            payload = {"ok": True, "count": len(entries),
+                       "results": [e.__dict__ for e in entries]}
+            _emit(payload, args.json,
+                  "\n".join(f"{e.name}  [{e.author}]  {e.install_url}"
+                            for e in entries[:20]) or "（无结果）")
+            return ec.EXIT_OK
+        if args.action == "install":
+            target = args.target or args.extra or args.name or ""
+            if not target:
+                _emit({"ok": False, "error": "缺少目标（git URL 或插件名）"},
+                      args.json, "缺少目标")
+                return ec.EXIT_ERROR
+            info = svc.install(target)
+            payload = {"ok": True, "action": "install", "plugin": info.__dict__}
+            _emit(payload, args.json, f"已安装 {info.dir_name}")
             return ec.EXIT_OK
         if args.action in ("enable", "disable"):
             if not args.name:
@@ -374,7 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("start", help="启动 ComfyUI（阻塞到就绪或超时）")
     sp.add_argument("--no-wait", action="store_true", help="spawn 后立即返回")
-    sp.add_argument("--timeout", type=float, default=60.0, help="等待就绪上限秒数")
+    sp.add_argument("--timeout", type=float, default=180.0, help="等待就绪上限秒数")
     sp.add_argument("--env", default=None, help="一次性指定环境 id（默认用激活环境）")
     sp.set_defaults(func=cmd_start)
 
@@ -386,7 +406,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("restart", help="先停后启")
     sp.add_argument("--no-wait", action="store_true")
-    sp.add_argument("--timeout", type=float, default=60.0)
+    sp.add_argument("--timeout", type=float, default=180.0)
     sp.add_argument("--env", default=None)
     sp.set_defaults(func=cmd_restart)
 
@@ -405,8 +425,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("plugins", help="管理 custom_nodes 插件")
     sp.add_argument("action", choices=["list", "enable", "disable", "uninstall",
-                                       "check-updates", "update", "update-all"])
+                                       "check-updates", "update", "update-all",
+                                       "search", "install"])
     sp.add_argument("name", nargs="?", help="目标插件 dir_name（list/check/update-all 不需要）")
+    sp.add_argument("extra", nargs="?", help="search 的关键词 / install 的 URL")
+    sp.add_argument("--query", default=None, help="search 关键词（也可用位置参数）")
+    sp.add_argument("--target", default=None, help="install 目标（也可用位置参数）")
     sp.add_argument("--yes", action="store_true", help="危险操作确认位（uninstall）")
     sp.set_defaults(func=cmd_plugins)
 

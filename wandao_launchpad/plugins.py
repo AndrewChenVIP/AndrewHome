@@ -9,7 +9,10 @@
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -21,6 +24,20 @@ logger = logging.getLogger(__name__)
 DISABLED_SUFFIX = ".disabled"
 CHECK_WORKERS = 8
 GIT_TIMEOUT = 30.0
+
+# ComfyUI-Manager 官方插件清单（搜索/按名安装的解析源）
+NODE_LIST_URL = ("https://raw.githubusercontent.com/ltdrdata/"
+                 "ComfyUI-Manager/main/custom-node-list.json")
+NODE_LIST_TTL_SEC = 3600.0
+
+
+@dataclass
+class NodeListEntry:
+    name: str
+    description: str
+    reference: str          # 主页/仓库地址
+    install_url: str        # 可 clone 的 git 地址
+    author: str
 
 
 @dataclass
@@ -35,8 +52,11 @@ class PluginInfo:
 
 
 class PluginService:
-    def __init__(self, custom_nodes_dir: Path):
+    def __init__(self, custom_nodes_dir: Path, cache_dir: Path | None = None,
+                 github_proxy: str = ""):
         self.dir = Path(custom_nodes_dir)
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+        self.github_proxy = (github_proxy or "").strip()
 
     # ---------- 扫描（纯目录，快） ----------
 
@@ -156,3 +176,125 @@ class PluginService:
     def update_all(self, only: list[str] | None = None) -> list[dict]:
         targets = only or [p.dir_name for p in self.list() if p.is_git and p.enabled]
         return [self.update_one(d) for d in sorted(targets)]
+
+    # ---------- 搜索与安装 ----------
+
+    def _node_list_cache_path(self) -> Path | None:
+        return self.cache_dir / "node_list_cache.json" if self.cache_dir else None
+
+    def _load_node_list(self, force: bool = False) -> list[NodeListEntry]:
+        """官方 custom-node-list.json（直连失败自动走代理；缓存 1h）。"""
+        import urllib.request
+
+        cache = self._node_list_cache_path()
+        if cache and cache.exists() and not force:
+            try:
+                raw = json.loads(cache.read_text(encoding="utf-8-sig"))
+                if time.time() - float(raw.get("fetched_at", 0)) < NODE_LIST_TTL_SEC:
+                    return [NodeListEntry(**e) for e in raw.get("nodes", [])]
+            except (OSError, ValueError, TypeError):
+                logger.debug("节点清单缓存失效，重取", exc_info=True)
+
+        urls = [NODE_LIST_URL]
+        if self.github_proxy:
+            urls.append(self.github_proxy.rstrip("/") + "/" + NODE_LIST_URL)
+        data = None
+        last_err = ""
+        for url in urls:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "WandaoLaunchpad"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                break
+            except (OSError, ValueError) as exc:
+                last_err = str(exc)
+                logger.debug("节点清单获取失败 %s: %s", url, exc)
+        if data is None:
+            raise RuntimeError(f"插件清单获取失败（直连+代理都失败）: {last_err[:200]}")
+
+        entries: list[NodeListEntry] = []
+        for item in data if isinstance(data, list) else []:
+            try:
+                name = str(item.get("title", "") or item.get("name", "") or "")
+                ref = str(item.get("reference", "") or "")
+                install = ""
+                for sec in item.get("installed_ver", []) or item.get("aux_id", []) or []:
+                    if isinstance(sec, dict) and str(sec.get("type", "")) == "git-clone":
+                        install = str(sec.get("id", ""))
+                        break
+                if not install and ref:
+                    install = ref
+                author = ""
+                m = re.search(r"github\.com/([^/]+)/", ref + "/")
+                if m:
+                    author = m.group(1)
+                if name and install:
+                    entries.append(NodeListEntry(
+                        name=name[:120],
+                        description=str(item.get("description", ""))[:300],
+                        reference=ref, install_url=install, author=author))
+            except (AttributeError, TypeError):
+                logger.debug("清单条目解析跳过", exc_info=True)
+        if cache:
+            try:
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                cache.write_text(json.dumps(
+                    {"fetched_at": time.time(),
+                     "nodes": [e.__dict__ for e in entries]}, ensure_ascii=False),
+                    encoding="utf-8")
+            except OSError:
+                logger.debug("节点清单缓存写入失败", exc_info=True)
+        return entries
+
+    def search(self, query: str, limit: int = 30) -> list[NodeListEntry]:
+        q = query.strip().lower()
+        if not q:
+            return []
+        scored: list[tuple[int, NodeListEntry]] = []
+        for e in self._load_node_list():
+            hay = f"{e.name} {e.description} {e.author}".lower()
+            if q in e.name.lower():
+                scored.append((0, e))
+            elif q in hay:
+                scored.append((1, e))
+        scored.sort(key=lambda pair: (pair[0], pair[1].name))
+        return [e for _, e in scored[:limit]]
+
+    def _proxied(self, url: str) -> str:
+        if self.github_proxy and "github.com" in url:
+            return self.github_proxy.rstrip("/") + "/" + url
+        return url
+
+    def install(self, target: str) -> PluginInfo:
+        """target = git URL / 本地仓库路径 / 插件名（按官方清单解析）。"""
+        url = target.strip()
+        looks_like_location = (url.startswith(("http://", "https://", "file://"))
+                               or "\\" in url or "/" in url or url.endswith(".git"))
+        if not looks_like_location:
+            matches = [e for e in self._load_node_list()
+                       if e.name.lower() == url.lower()]
+            if not matches:
+                matches = [e for e in self.search(url, limit=1)]
+            if not matches:
+                raise RuntimeError(f"清单中找不到插件: {target}（也可直接给 git URL）")
+            url = matches[0].install_url
+        raw = url.rstrip("/")
+        if raw.endswith(".git"):
+            raw = raw[:-len(".git")]
+        dir_name = raw.replace("\\", "/").rsplit("/", 1)[-1]
+        if not dir_name:
+            raise RuntimeError(f"无法从 URL 推导目录名: {url}")
+        dest = self.dir / dir_name
+        if dest.exists():
+            raise FileExistsError(f"已存在同名目录: {dir_name}")
+        rc, out, err = git(["clone", "--depth", "1", self._proxied(url), str(dest)],
+                           timeout=600.0)
+        if rc != 0:
+            # 失败清残骸，不留半拉子目录
+            import shutil
+            try:
+                shutil.rmtree(dest, ignore_errors=True)
+            except OSError:
+                logger.debug("克隆失败清理残留", exc_info=True)
+            raise RuntimeError(f"clone 失败: {err[:200]}")
+        return self._info_of(dest)
