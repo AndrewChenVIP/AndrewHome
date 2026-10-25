@@ -169,6 +169,9 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_support = QtWidgets.QPushButton("📦 打包支持包")
         btn_support.clicked.connect(self._make_support_zip)
         quick.addWidget(btn_support)
+        btn_doctor = QtWidgets.QPushButton("🩺 体检")
+        btn_doctor.clicked.connect(self._run_doctor)
+        quick.addWidget(btn_doctor)
         lay.addLayout(quick)
 
         self.state_label = QtWidgets.QLabel("")
@@ -308,6 +311,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._start_worker.start()
 
     def _on_started(self, ok: bool, res: dict) -> None:
+        if res.get("preflight"):
+            fails = res.get("fail", [])
+            lines = "\n".join(f"✗ {f['name']}: {f['detail']}" for f in fails)
+            QtWidgets.QMessageBox.warning(
+                self, "启动前体检未通过", "以下问题必须先解决：\n\n" + lines)
+            self._set_state("idle", "体检未通过，未启动")
+            return
         if ok:
             self._set_state("running", f"运行中 {res.get('url')} (PID={res.get('pid')})")
             self._start_tail(self._current_log_path())
@@ -430,6 +440,35 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             QtWidgets.QMessageBox.warning(self, "打包失败", str(payload.get("error")))
 
+    def _run_doctor(self) -> None:
+        from ..constants import pidfile_path as pfp
+        from .workers import FunctionWorker
+
+        def job():
+            from .. import doctor
+            from ..context import build_context as bc
+            cfg = self.store.load()
+            checks = doctor.run_checks(bc(cfg), config_dir=self.store.config_dir)
+            nf, nw = doctor.summarize(checks)
+            return {"ok": nf == 0, "checks": checks, "fail": nf, "warn": nw}
+        self.statusBar().showMessage("体检中…")
+        self._doctor_worker = FunctionWorker(job, self)
+        self._doctor_worker.finished_sig.connect(self._on_doctor_done)
+        self._doctor_worker.start()
+
+    def _on_doctor_done(self, ok: bool, payload: dict) -> None:
+        if not ok and "checks" not in payload:
+            QtWidgets.QMessageBox.warning(self, "体检失败", str(payload.get("error")))
+            return
+        icon = {"ok": "✓", "warn": "⚠", "fail": "✗"}
+        lines = [f"{icon.get(c['level'], '·')} {c['name']}：{c['detail']}"
+                 for c in payload.get("checks", [])]
+        nf, nw = payload.get("fail", 0), payload.get("warn", 0)
+        tail = "无阻塞项，可以启动。" if nf == 0 else f"有 {nf} 项阻塞，先解决再启动！"
+        QtWidgets.QMessageBox.information(
+            self, f"体检结果（✗{nf} ⚠{nw}）", "\n".join(lines) + "\n\n" + tail)
+        self.statusBar().showMessage(f"体检完成：✗{nf} ⚠{nw}", 5000)
+
     # ---------- 系统托盘 ----------
 
     def _build_tray(self) -> None:
@@ -498,7 +537,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.form.flush()
         self._stop_tail()
         self._poll.stop()
-        for worker in (self._status_worker, self._start_worker, self._stop_worker):
+        for worker in (self._status_worker, self._start_worker, self._stop_worker,
+                       self._support_worker, getattr(self, "_doctor_worker", None)):
             if worker is not None and worker.isRunning():
                 worker.wait(2000)
         if self._tray is not None:

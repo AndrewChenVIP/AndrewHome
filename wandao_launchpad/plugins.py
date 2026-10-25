@@ -170,8 +170,10 @@ class PluginService:
         rc, out, err = git(["pull", "--ff-only"], cwd=str(p), timeout=300.0)
         if rc != 0:
             return {"dir_name": dir_name, "ok": False, "skipped": False,
-                    "detail": f"pull 失败: {err[:200]}"}
-        return {"dir_name": dir_name, "ok": True, "skipped": False, "detail": out.strip()[:300]}
+                    "detail": f"pull 失败: {err[:200]}", "changed": False}
+        changed = "up to date" not in out.lower()
+        return {"dir_name": dir_name, "ok": True, "skipped": False,
+                "detail": out.strip()[:300], "changed": changed}
 
     def update_all(self, only: list[str] | None = None) -> list[dict]:
         targets = only or [p.dir_name for p in self.list() if p.is_git and p.enabled]

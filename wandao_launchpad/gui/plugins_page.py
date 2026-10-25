@@ -112,7 +112,7 @@ class PluginsPage(QtWidgets.QWidget):
     # ---------- 动作 ----------
 
     def search_install(self) -> None:
-        """搜索官方插件清单并安装（输入 git URL 则直接 clone）。"""
+        """搜索官方插件清单并安装（输入 git URL 则直接 clone），自动装依赖。"""
         text, ok = QtWidgets.QInputDialog.getText(
             self, "搜索安装插件",
             "输入插件名（搜官方清单）或 git URL：")
@@ -122,13 +122,34 @@ class PluginsPage(QtWidgets.QWidget):
         label = target if target.startswith("http") else f"名称「{target}」匹配的插件"
 
         def job():
-            return {"ok": True, "plugin": self._svc().install(target).__dict__}
-        self.status_cb(f"安装 {label}（clone 走网络，稍候）…")
+            info = self._svc().install(target)
+            deps = self._ensure_deps(info.dir_name)
+            return {"ok": True, "plugin": info.__dict__, "deps": deps}
+        self.status_cb(f"安装 {label}（clone+依赖，稍候）…")
         self._run(job, lambda ok_, p: self._on_installed(p, ok_))
+
+    def _ensure_deps(self, dir_name: str) -> dict:
+        """装插件 requirements（无文件则跳过）。失败不中断。"""
+        from .. import pipx
+        from ..network import pip_index_url
+        try:
+            ctx = build_context(self.store.load())
+            return pipx.ensure_requirements(
+                self._svc().dir / dir_name, ctx.python_exe,
+                index_url=pip_index_url(self.store.load().mirrors.pypi))
+        except Exception as exc:  # noqa: BLE001 —— 依赖失败不拖垮安装结果
+            return {"ran": True, "ok": False, "log": "", "reason": str(exc)}
 
     def _on_installed(self, payload: dict, ok: bool) -> None:
         if ok:
-            self.status_cb(f"已安装 {payload.get('plugin', {}).get('dir_name')}")
+            name = payload.get("plugin", {}).get("dir_name", "")
+            deps = payload.get("deps") or {}
+            note = ""
+            if deps.get("ran") and deps.get("ok") is False:
+                note = "（依赖安装失败，见日志）"
+            elif deps.get("ran"):
+                note = "（依赖已装）"
+            self.status_cb(f"已安装 {name}{note}")
         else:
             QtWidgets.QMessageBox.warning(self, "安装失败", str(payload.get("error")))
             self.status_cb(f"安装失败: {payload.get('error')}")
@@ -158,7 +179,15 @@ class PluginsPage(QtWidgets.QWidget):
             return
 
         def job():
-            return {"ok": True, "results": self._svc().update_all()}
+            results = self._svc().update_all()
+            dep_note = 0
+            for r in results:
+                if r.get("ok") and r.get("changed"):
+                    deps = self._ensure_deps(r["dir_name"])
+                    r["deps"] = deps
+                    if deps.get("ran"):
+                        dep_note += 1
+            return {"ok": True, "results": results, "deps_done": dep_note}
         self.status_cb("更新全部插件…")
         self._run(job, self._on_updated)
 
@@ -166,7 +195,9 @@ class PluginsPage(QtWidgets.QWidget):
         results = payload.get("results", [])
         done = sum(1 for r in results if r["ok"])
         skip = sum(1 for r in results if r["skipped"])
-        self.status_cb(f"插件更新完成 {done}/{len(results)}（跳过 {skip}）")
+        dep_note = payload.get("deps_done", 0)
+        dep_txt = f"，依赖安装 {dep_note}" if dep_note else ""
+        self.status_cb(f"插件更新完成 {done}/{len(results)}（跳过 {skip}{dep_txt}）")
         self.reload()
 
     def set_selected(self, enable: bool) -> None:

@@ -134,3 +134,18 @@ schtasks /Create /TN "WandaoLaunchpadWatch" /SC MINUTE /MO 5 /TR "C:\...\WandaoL
 ```
 
 GUI：关闭窗口可最小化到系统托盘（设置页开关）；托盘菜单含"退出并关闭 ComfyUI"。
+
+## 依赖联动与体检（v0.7）
+
+```bash
+python -m wandao_launchpad doctor              # 八项体检（python/入口/端口/磁盘/pip/内核/yaml/模型库）
+python -m wandao_launchpad doctor --quick      # 快检查（无子进程；启动预检同款）
+python -m wandao_launchpad plugins install X   # 装完自动装插件 requirements.txt
+python -m wandao_launchpad kernel update --sync-deps   # 更新内核后同步 requirements
+```
+
+- `--no-deps` 可跳过插件依赖安装；`install/update` 后有 requirements 才触发。
+- **CUDA 冻结保护**：`torch / torchvision / torchaudio / triton` 永远不被 pip 触碰
+  （内核依赖同步只做 only-if-needed 升级，冻结包先行剔除）——保护手工调好的 CUDA 栈。
+- GUI：启动页「🩺 体检」按钮；点「一键启动」自动先跑快体检，阻塞项直接拦截；
+  内核页「同步依赖库」勾选。

@@ -218,6 +218,22 @@ def _custom_nodes_dir(ctx) -> Path:
     return ctx.comfyui_root / "ComfyUI" / "custom_nodes"
 
 
+def _pip_index(store: ConfigStore) -> str | None:
+    from ..network import pip_index_url
+    return pip_index_url(store.load().mirrors.pypi)
+
+
+def _ensure_plugin_deps(ctx, store: ConfigStore, plugin_path: Path) -> dict | None:
+    """装插件 requirements（有才跑）。失败只随 payload 上报，不中断主流程。"""
+    from .. import pipx
+    try:
+        return pipx.ensure_requirements(plugin_path, ctx.python_exe,
+                                        index_url=_pip_index(store))
+    except Exception as exc:  # noqa: BLE001 —— 依赖失败不拖垮安装结果
+        logger.warning("插件依赖安装异常: %s", plugin_path, exc_info=True)
+        return {"ran": True, "ok": False, "log": "", "reason": str(exc)}
+
+
 def cmd_plugins(args) -> int:
     from ..plugins import PluginService
 
@@ -253,8 +269,17 @@ def cmd_plugins(args) -> int:
                       args.json, "缺少目标")
                 return ec.EXIT_ERROR
             info = svc.install(target)
-            payload = {"ok": True, "action": "install", "plugin": info.__dict__}
-            _emit(payload, args.json, f"已安装 {info.dir_name}")
+            deps = None
+            if not args.no_deps:
+                deps = _ensure_plugin_deps(ctx, store, _custom_nodes_dir(ctx) / info.dir_name)
+            payload = {"ok": True, "action": "install", "plugin": info.__dict__,
+                       "deps": deps}
+            msg = f"已安装 {info.dir_name}"
+            if deps and deps.get("ran") and not deps.get("ok"):
+                msg += "（依赖安装失败，见 deps.log）"
+            elif deps and deps.get("ran"):
+                msg += "（依赖已装）"
+            _emit(payload, args.json, msg)
             return ec.EXIT_OK
         if args.action in ("enable", "disable"):
             if not args.name:
@@ -287,6 +312,11 @@ def cmd_plugins(args) -> int:
             return ec.EXIT_OK
         if args.action == "update-all":
             results = svc.update_all()
+            if not args.no_deps:
+                for r in results:
+                    if r.get("ok") and r.get("changed"):
+                        r["deps"] = _ensure_plugin_deps(
+                            ctx, store, _custom_nodes_dir(ctx) / r["dir_name"])
             all_ok = all(r["ok"] for r in results)
             payload = {"ok": all_ok, "count": len(results), "results": results}
             _emit(payload, args.json,
@@ -298,6 +328,9 @@ def cmd_plugins(args) -> int:
                 _emit({"ok": False, "error": "缺少插件名"}, args.json, "缺少插件名")
                 return ec.EXIT_ERROR
             result = svc.update_one(args.name)
+            if result.get("ok") and result.get("changed") and not args.no_deps:
+                result["deps"] = _ensure_plugin_deps(
+                    ctx, store, _custom_nodes_dir(ctx) / args.name)
             payload = {"ok": result["ok"], **result}
             _emit(payload, args.json,
                   f"已更新 {args.name}" if result["ok"] else f"未更新 {args.name}: {result['detail']}")
@@ -332,11 +365,22 @@ def cmd_kernel(args) -> int:
             return ec.EXIT_OK
         if args.action == "update":
             result = svc.update(dry_run=args.dry_run, stable_only=args.stable_only)
-            payload = {"ok": True, **result}
+            deps = None
+            if result["updated"] and args.sync_deps and not args.dry_run:
+                from .. import pipx
+                deps = pipx.sync_comfy_requirements(
+                    ctx.comfyui_root / "ComfyUI", ctx.python_exe,
+                    index_url=_pip_index(store))
+            payload = {"ok": True, **result, "deps": deps}
             code = ec.EXIT_OK if result["updated"] else ec.EXIT_ALREADY_LATEST
-            _emit(payload, args.json,
-                  f"已更新 → {result['to']}" if result["updated"]
-                  else f"已是最新（{result['to']}）")
+            msg = (f"已更新 → {result['to']}" if result["updated"]
+                   else f"已是最新（{result['to']}）")
+            if deps:
+                if deps.get("ran") and deps.get("ok"):
+                    msg += f"（依赖已同步，冻结剔除 {len(deps.get('dropped', []))} 项）"
+                elif deps.get("ran"):
+                    msg += "（依赖同步失败：pip 非零退出，CUDA 栈未受影响）"
+            _emit(payload, args.json, msg)
             return code
         if args.action == "log":
             rows = svc.log(count=args.lines, skip=args.skip)
@@ -412,6 +456,24 @@ def cmd_support(args) -> int:
     return ec.EXIT_OK
 
 
+def cmd_doctor(args) -> int:
+    from ..doctor import blockers, run_checks, summarize
+
+    store = ConfigStore(Path(args.home) if args.home else None)
+    ctx, err = _load_ctx(store, None)
+    if ctx is None:
+        _emit({"ok": False, "error": err}, args.json, f"错误: {err}")
+        return ec.EXIT_ERROR
+    checks = run_checks(ctx, quick=args.quick, config_dir=store.config_dir)
+    nf, nw = summarize(checks)
+    icon = {"ok": "✓", "warn": "⚠", "fail": "✗"}
+    lines = [f"{icon.get(c['level'], '·')} {c['name']}: {c['detail']}" for c in checks]
+    payload = {"ok": nf == 0, "fail": nf, "warn": nw, "checks": checks}
+    _emit(payload, args.json,
+          "\n".join(lines) + f"\n结论: {'✗ 有 ' + str(nf) + ' 项阻塞，先解决再启动' if nf else '✓ 无阻塞' + (f'（{nw} 项提醒）' if nw else '')}")
+    return ec.EXIT_OK if nf == 0 else ec.EXIT_ERROR
+
+
 # ---------- 参数解析 ----------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -462,6 +524,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--query", default=None, help="search 关键词（也可用位置参数）")
     sp.add_argument("--target", default=None, help="install 目标（也可用位置参数）")
     sp.add_argument("--yes", action="store_true", help="危险操作确认位（uninstall）")
+    sp.add_argument("--no-deps", dest="no_deps", action="store_true",
+                    help="跳过 requirements.txt 依赖安装（install/update/update-all）")
     sp.set_defaults(func=cmd_plugins)
 
     sp = sub.add_parser("kernel", help="ComfyUI 内核版本管理")
@@ -469,10 +533,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("ref", nargs="?", help="checkout 目标（commit/tag/branch）")
     sp.add_argument("--dry-run", action="store_true")
     sp.add_argument("--stable-only", action="store_true", help="只更新到稳定版标签")
+    sp.add_argument("--sync-deps", dest="sync_deps", action="store_true",
+                    help="更新成功后同步 requirements（only-if-needed 升级，"
+                         "torch/torchvision/torchaudio/triton 永不动）")
     sp.add_argument("-n", "--lines", type=int, default=50, help="log 条数")
     sp.add_argument("--skip", type=int, default=0, help="log 分页偏移")
     sp.add_argument("--yes", action="store_true", help="checkout 确认位")
     sp.set_defaults(func=cmd_kernel)
+
+    sp = sub.add_parser("doctor", help="启动前体检（环境/入口/端口/磁盘/依赖/内核/模型库）")
+    sp.add_argument("--quick", action="store_true",
+                    help="只跑无子进程的快检查（启动预检同款）")
+    sp.set_defaults(func=cmd_doctor)
 
     sp = sub.add_parser("models", help="外置模型库（extra_model_paths.yaml）")
     sp.add_argument("action", choices=["list", "import", "validate", "apply"])

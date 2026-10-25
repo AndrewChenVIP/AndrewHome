@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wandao-launchpad"
-version = "0.6.0"
+version = "0.7.0"
 description = "万道启动台 WandaoLaunchpad —— 万道自研 ComfyUI 启动器（GUI + CLI 同体）"
 readme = "README.md"
 requires-python = ">=3.10"

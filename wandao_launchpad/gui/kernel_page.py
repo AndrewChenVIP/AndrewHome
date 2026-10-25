@@ -38,6 +38,8 @@ class KernelPage(QtWidgets.QWidget):
         row = QtWidgets.QHBoxLayout()
         self.stable_only = QtWidgets.QCheckBox("仅更新到稳定版标签")
         row.addWidget(self.stable_only)
+        self.sync_deps = QtWidgets.QCheckBox("同步依赖库（torch 系冻结不动）")
+        row.addWidget(self.sync_deps)
         btn_update = QtWidgets.QPushButton("更新内核")
         btn_update.setObjectName("primary")
         btn_update.clicked.connect(self.update_kernel)
@@ -114,7 +116,17 @@ class KernelPage(QtWidgets.QWidget):
             return
 
         def job():
-            return {"ok": True, **self._svc(for_write=True).update(stable_only=stable)}
+            result = {"ok": True,
+                      **self._svc(for_write=True).update(stable_only=stable)}
+            if result.get("updated") and self.sync_deps.isChecked():
+                from .. import pipx
+                from ..network import pip_index_url
+                cfg = self.store.load()
+                ctx = build_context(cfg)
+                result["deps"] = pipx.sync_comfy_requirements(
+                    ctx.comfyui_root / "ComfyUI", ctx.python_exe,
+                    index_url=pip_index_url(cfg.mirrors.pypi))
+            return result
         self.status_cb("更新内核（fetch 可能较慢）…")
         self._run(job, self._on_updated)
 
@@ -123,10 +135,15 @@ class KernelPage(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "更新失败", str(payload.get("error")))
             self.status_cb(f"内核更新失败: {payload.get('error')}")
             return
+        deps = payload.get("deps") or {}
+        if deps.get("ran"):
+            note = "，依赖已同步" if deps.get("ok") else "，依赖同步失败（CUDA 栈未动）"
+        else:
+            note = ""
         if not payload.get("updated"):
             self.status_cb(f"内核已是最新（{payload.get('to')}）")
         else:
-            self.status_cb(f"内核已更新 → {payload.get('to')}")
+            self.status_cb(f"内核已更新 → {payload.get('to')}{note}")
         self.reload()
 
     # ---------- 历史 ----------

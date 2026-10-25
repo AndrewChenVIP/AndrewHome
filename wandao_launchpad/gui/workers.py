@@ -54,12 +54,21 @@ class StartWorker(_Worker):
         try:
             cfg = self.store.load()
             ctx = build_context(cfg)
+            # 启动前体检（quick：无子进程快检查）——fail 级问题直接拦截
+            from .. import doctor
+            checks = doctor.run_checks(ctx, quick=True)
+            fails = doctor.blockers(checks)
+            if fails:
+                self._done(False, {"preflight": True, "error": "体检未通过",
+                                   "checks": checks, "fail": fails})
+                return
             pm = ProcessManager(ctx, pidfile_path(self.store.config_dir))
-            res = pm.start(wait_timeout=60.0)
+            res = pm.start(wait_timeout=180.0)
             self._done(res.started and res.ready, {
                 "started": res.started, "ready": res.ready, "pid": res.pid,
                 "url": res.url, "error": res.error,
                 "already_running": bool(res.running_env_id),
+                "external": res.external,
             })
         except Exception as exc:  # noqa: BLE001 —— worker 边界必须兜底并上报
             logger.error("StartWorker 异常", exc_info=True)
