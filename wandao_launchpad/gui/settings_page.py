@@ -9,11 +9,13 @@ from PyQt5 import QtCore, QtWidgets
 
 from ..config import Config, ConfigStore, Environment
 from ..constants import DEFAULT_GITHUB_PROXY, DEFAULT_HF_MIRROR, PIP_MIRRORS
+from .workers import FunctionWorker
 
 
 class SettingsPage(QtWidgets.QWidget):
     saved = QtCore.pyqtSignal()          # 任何配置保存后（含切环境）
     theme_change_requested = QtCore.pyqtSignal(str)
+    auto_archive_toggled = QtCore.pyqtSignal(bool)
 
     def __init__(self, store: ConfigStore, parent=None):
         super().__init__(parent)
@@ -99,13 +101,37 @@ class SettingsPage(QtWidgets.QWidget):
         # ---- 出图归档 ----
         arch_box = QtWidgets.QGroupBox("出图归档（只增不删，按日期分夹）")
         ag = QtWidgets.QGridLayout(arch_box)
-        ag.addWidget(QtWidgets.QLabel("NAS 落点"), 0, 0)
+        ag.addWidget(QtWidgets.QLabel("图像落点"), 0, 0)
         self.arch_target = QtWidgets.QLineEdit()
         ag.addWidget(self.arch_target, 0, 1)
         btn_arch = QtWidgets.QPushButton("浏览…")
-        btn_arch.clicked.connect(self._pick_archive_target)
+        btn_arch.clicked.connect(lambda: self._pick_dir(self.arch_target))
         ag.addWidget(btn_arch, 0, 2)
+        ag.addWidget(QtWidgets.QLabel("视频落点"), 1, 0)
+        self.arch_video_target = QtWidgets.QLineEdit()
+        ag.addWidget(self.arch_video_target, 1, 1)
+        btn_arch_v = QtWidgets.QPushButton("浏览…")
+        btn_arch_v.clicked.connect(lambda: self._pick_dir(self.arch_video_target))
+        ag.addWidget(btn_arch_v, 1, 2)
+        self.auto_arch_cb = QtWidgets.QCheckBox("新出图自动归档（落定后自动入 NAS，托盘提示）")
+        self.auto_arch_cb.toggled.connect(self._on_auto_arch_toggled)
+        ag.addWidget(self.auto_arch_cb, 2, 0, 1, 3)
         lay.addWidget(arch_box)
+
+        # ---- 开机自启 ----
+        auto_box = QtWidgets.QGroupBox("开机自启（登录后拉起万道启动台）")
+        hb = QtWidgets.QHBoxLayout(auto_box)
+        self.autostart_status = QtWidgets.QLabel("（未检测）")
+        self.autostart_status.setObjectName("muted")
+        hb.addWidget(self.autostart_status)
+        hb.addStretch(1)
+        self.btn_autostart_on = QtWidgets.QPushButton("注册自启")
+        self.btn_autostart_on.clicked.connect(lambda: self._toggle_autostart(True))
+        self.btn_autostart_off = QtWidgets.QPushButton("取消自启")
+        self.btn_autostart_off.clicked.connect(lambda: self._toggle_autostart(False))
+        hb.addWidget(self.btn_autostart_on)
+        hb.addWidget(self.btn_autostart_off)
+        lay.addWidget(auto_box)
 
         row = QtWidgets.QHBoxLayout()
         row.addStretch(1)
@@ -150,9 +176,14 @@ class SettingsPage(QtWidgets.QWidget):
         ti = self.theme_combo.findData(saved_theme)
         self.theme_combo.setCurrentIndex(max(0, ti))
         self.close_tray_cb.setChecked(cfg.get_ui_pref("close_to_tray") == "1")
-        from ..archive import DEFAULT_ARCHIVE_TARGET
+        from ..archive import DEFAULT_ARCHIVE_TARGET, DEFAULT_VIDEO_TARGET
         self.arch_target.setText(cfg.get_ui_pref("archive_target",
                                                  DEFAULT_ARCHIVE_TARGET))
+        self.arch_video_target.setText(cfg.get_ui_pref(
+            "archive_video_target", DEFAULT_VIDEO_TARGET))
+        self.auto_arch_cb.blockSignals(True)
+        self.auto_arch_cb.setChecked(cfg.get_ui_pref("auto_archive") == "1")
+        self.auto_arch_cb.blockSignals(False)
 
     def _selected_env(self, cfg: Config) -> Environment | None:
         row = self.env_list.currentRow()
@@ -246,6 +277,7 @@ class SettingsPage(QtWidgets.QWidget):
         cfg.mirrors.github_proxy = self.mir_gh.text().strip()
         cfg.mirrors.pypi = self.mir_pypi.currentText().strip()
         cfg.set_ui_pref("archive_target", self.arch_target.text().strip())
+        cfg.set_ui_pref("archive_video_target", self.arch_video_target.text().strip())
         self.store.save(cfg)
         self.saved.emit()
 
@@ -272,7 +304,66 @@ class SettingsPage(QtWidgets.QWidget):
         if f:
             edit.setText(f)
 
-    def _pick_archive_target(self) -> None:
-        d = QtWidgets.QFileDialog.getExistingDirectory(self, "选择 NAS 归档落点")
-        if d:
-            self.arch_target.setText(d)
+    def _on_auto_arch_toggled(self, checked: bool) -> None:
+        cfg = self.store.load()
+        cfg.set_ui_pref("auto_archive", "1" if checked else "0")
+        self.store.save(cfg)
+        self.auto_archive_toggled.emit(checked)
+
+    def _toggle_autostart(self, register: bool) -> None:
+        from .. import autostart
+
+        if register and not autostart.is_frozen_exe():
+            QtWidgets.QMessageBox.information(
+                self, "开发模式",
+                "开机自启仅便携版支持（需指向独立 exe）。当前为源码运行。")
+            return
+        self.btn_autostart_on.setEnabled(False)
+        self.btn_autostart_off.setEnabled(False)
+
+        def job():
+            if register:
+                import sys
+                return {"ok": True, **autostart.register(sys.executable),
+                        "is_registered": True}
+            return {"ok": True, **autostart.unregister(), "is_registered": False}
+        self._auto_worker = FunctionWorker(job, self)
+        self._auto_worker.finished_sig.connect(lambda ok, p: self._on_autostart_done(ok, p))
+        self._auto_worker.start()
+
+    def _on_autostart_done(self, ok: bool, payload: dict) -> None:
+        self.btn_autostart_on.setEnabled(True)
+        self.btn_autostart_off.setEnabled(True)
+        if ok:
+            self.autostart_status.setText(
+                "已注册（登录即启动）" if payload.get("is_registered") else "未注册")
+            QtWidgets.QMessageBox.information(
+                self, "开机自启", payload.get("detail", "完成"))
+        else:
+            QtWidgets.QMessageBox.warning(self, "操作失败", str(payload.get("error")))
+        self._refresh_autostart_status()
+
+    def _refresh_autostart_status(self) -> None:
+        from .. import autostart
+
+        def job():
+            frozen = autostart.is_frozen_exe()
+            reg = autostart.is_registered() if frozen else False
+            return {"ok": True, "frozen": frozen, "registered": reg}
+        self._astatus_worker = FunctionWorker(job, self)
+        self._astatus_worker.finished_sig.connect(self._on_autostart_status)
+        self._astatus_worker.start()
+
+    def _on_autostart_status(self, ok: bool, payload: dict) -> None:
+        if not ok:
+            return
+        if not payload.get("frozen"):
+            self.autostart_status.setText("源码运行，不支持一键自启（便携版可用）")
+        elif payload.get("registered"):
+            self.autostart_status.setText("已注册（登录即启动）")
+        else:
+            self.autostart_status.setText("未注册")
+
+    def showEvent(self, event) -> None:
+        self._refresh_autostart_status()
+        super().showEvent(event)

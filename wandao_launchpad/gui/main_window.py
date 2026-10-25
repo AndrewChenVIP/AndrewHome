@@ -79,6 +79,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings_page = SettingsPage(store)
         self.settings_page.saved.connect(self._on_settings_saved)
         self.settings_page.theme_change_requested.connect(self._apply_theme)
+        self.settings_page.auto_archive_toggled.connect(self._set_auto_archive)
         self.about_page = self._build_about_page()
         for page in (self.launch_page, self.log_page, self.plugins_page,
                      self.kernel_page, self.models_page, self.archive_page,
@@ -104,6 +105,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._state = "idle"  # idle | starting | running | stopping
         self._really_quit = False
         self._build_tray()
+        self._auto_worker = None
+        self._set_auto_archive(self.store.load().get_ui_pref("auto_archive") == "1")
 
         QtCore.QTimer.singleShot(0, self._initial_status)
 
@@ -373,6 +376,37 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ---------- 其他 ----------
 
+    # ---------- 自动归档看门 ----------
+
+    def _set_auto_archive(self, on: bool) -> None:
+        from .workers import AutoArchiveWorker
+        if on:
+            if self._auto_worker is not None and self._auto_worker.isRunning():
+                return
+            self._auto_worker = AutoArchiveWorker(self.store, self)
+            self._auto_worker.archived_sig.connect(self._on_auto_archived)
+            self._auto_worker.start()
+            self.statusBar().showMessage("自动归档已开启：新出图落定后自动入 NAS", 4000)
+        else:
+            if self._auto_worker is not None:
+                self._auto_worker.stop()
+                self._auto_worker.wait(3000)
+                self._auto_worker = None
+            self.statusBar().showMessage("自动归档已关闭", 3000)
+
+    def _on_auto_archived(self, copied: int, skipped: int, failed: int) -> None:
+        if self._tray is None:
+            return
+        from PyQt5 import QtGui
+        if copied:
+            self._tray.showMessage(
+                "自动归档", f"已归档 {copied} 张新图到作品库",
+                QtWidgets.QSystemTrayIcon.Information, 3000)
+        elif failed:
+            self._tray.showMessage(
+                "自动归档失败", f"{failed} 个文件未能入 NAS（NAS 离线？60 秒后重试）",
+                QtWidgets.QSystemTrayIcon.Warning, 4000)
+
     def _on_settings_saved(self) -> None:
         self._refresh_env_label()
         self.form.reload()
@@ -539,6 +573,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.form.flush()
         self._stop_tail()
         self._poll.stop()
+        if self._auto_worker is not None:
+            self._auto_worker.stop()
+            self._auto_worker.wait(3000)
         for worker in (self._status_worker, self._start_worker, self._stop_worker,
                        self._support_worker, getattr(self, "_doctor_worker", None)):
             if worker is not None and worker.isRunning():

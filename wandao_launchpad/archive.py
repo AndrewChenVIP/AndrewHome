@@ -19,7 +19,9 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 DEFAULT_ARCHIVE_TARGET = r"\\100.108.142.97\Accumulation\WandaoOS\06AIGC作品库\图像"
+DEFAULT_VIDEO_TARGET = r"\\100.108.142.97\Accumulation\WandaoOS\06AIGC作品库\视频"
 LIST_LIMIT = 500
 
 
@@ -114,3 +116,30 @@ def archive_files(files: list[dict], target: str | Path,
             logger.warning("归档单文件失败: %s", src, exc_info=True)
             result["failed"].append({**f, "reason": str(exc)})
     return result
+
+
+class StabilityTracker:
+    """文件"落定"判定：大小连续 stable_after_sec 不变才算写完（防归档半写文件）。
+
+    纯核心，feed 每轮最新扫描即可；消失的文件自动遗忘。
+    """
+
+    def __init__(self, stable_after_sec: float = 3.0):
+        self.stable_after_sec = stable_after_sec
+        self._seen: dict[str, tuple[int, float]] = {}  # path -> (size, stable_since)
+
+    def feed(self, items: list[dict], now: float) -> list[dict]:
+        """输入本轮扫描（path/size/mtime），返回本轮刚落定的文件。"""
+        stable: list[dict] = []
+        seen_now: dict[str, tuple[int, float]] = {}
+        for it in items:
+            prev = self._seen.get(it["path"])
+            if prev and prev[0] == it["size"]:
+                since = prev[1]
+                if now - since >= self.stable_after_sec:
+                    stable.append(it)
+            else:
+                since = now
+            seen_now[it["path"]] = (it["size"], since)
+        self._seen = seen_now
+        return stable
