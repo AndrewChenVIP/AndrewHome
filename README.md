@@ -149,3 +149,17 @@ python -m wandao_launchpad kernel update --sync-deps   # 更新内核后同步 r
   （内核依赖同步只做 only-if-needed 升级，冻结包先行剔除）——保护手工调好的 CUDA 栈。
 - GUI：启动页「🩺 体检」按钮；点「一键启动」自动先跑快体检，阻塞项直接拦截；
   内核页「同步依赖库」勾选。
+
+## 出图归档（v0.8，万道特色）
+
+```bash
+python -m wandao_launchpad archive list            # 列 output 里的图像（新→旧）
+python -m wandao_launchpad archive run --dry-run   # 预览将归档什么（默认：自上次以来新增）
+python -m wandao_launchpad archive run --all       # 全量归档
+```
+
+- 落点出厂值 `\100.108.142.97\Accumulation\WandaoOS\06AIGC作品库\图像`，设置页可改。
+- **只增不删**：按日期分夹落库（图像/2026-10-26/…）；同名同大小视为已归档跳过；
+  同名不同大小自动改名续位（a_2.png），绝不覆盖 NAS 已有文件。
+- GUI「📤 归档」页：勾选式批量归档，"选新增（自上次归档）"一键筛选；
+  仅处理图像（png/jpg/webp/gif/bmp），视频暂不归档。

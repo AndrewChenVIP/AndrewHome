@@ -474,6 +474,66 @@ def cmd_doctor(args) -> int:
     return ec.EXIT_OK if nf == 0 else ec.EXIT_ERROR
 
 
+def cmd_archive(args) -> int:
+    from ..archive import (DEFAULT_ARCHIVE_TARGET, archive_files,
+                           list_recent_outputs, output_dir_of)
+
+    store = ConfigStore(Path(args.home) if args.home else None)
+    ctx, err = _load_ctx(store, None)
+    if ctx is None:
+        _emit({"ok": False, "error": err}, args.json, f"错误: {err}")
+        return ec.EXIT_ERROR
+    out_dir = output_dir_of(ctx.comfyui_root)
+
+    if args.action == "list":
+        items = list_recent_outputs(out_dir, limit=args.lines)
+        payload = {"ok": True, "output_dir": str(out_dir), "count": len(items),
+                   "items": items}
+        _emit(payload, args.json,
+              f"output 目录: {out_dir}（图像 {len(items)} 个，新→旧）"
+              if items else f"output 目录无图像: {out_dir}")
+        return ec.EXIT_OK
+
+    # run
+    target = args.target or store.load().get_ui_pref(
+        "archive_target", DEFAULT_ARCHIVE_TARGET)
+    items = list_recent_outputs(out_dir)
+    if not items:
+        _emit({"ok": True, "copied": 0, "note": "无图像可归档"}, args.json,
+              "output 目录无图像可归档")
+        return ec.EXIT_OK
+    if not args.all:
+        since = store.load().get_ui_pref("last_archive_at", "0")
+        try:
+            since = float(since)
+        except ValueError:
+            since = 0.0
+        items = [i for i in items if i["mtime"] > since] or items[:0]
+        if not items:
+            _emit({"ok": True, "copied": 0, "note": "自上次归档以来无新增"},
+                  args.json, "自上次归档以来无新增图像")
+            return ec.EXIT_OK
+    if args.dry_run:
+        total = sum(i["size"] for i in items)
+        _emit({"ok": True, "dry_run": True, "count": len(items),
+               "total_bytes": total, "target": target},
+              args.json, f"[dry-run] 将归档 {len(items)} 个文件"
+                         f"（{total/1024**2:.1f}MB）→ {target}")
+        return ec.EXIT_OK
+    result = archive_files(items, target)
+    if result["copied"]:
+        cfg = store.load()
+        cfg.set_ui_pref("last_archive_at", str(time.time()))
+        store.save(cfg)
+    nf = len(result["failed"])
+    payload = {"ok": nf == 0, **result}
+    _emit(payload, args.json,
+          f"归档完成：新增 {len(result['copied'])}，已存在跳过 "
+          f"{len(result['skipped'])}，改名 {len(result['renamed'])}，"
+          f"失败 {nf} → {result['target']}")
+    return ec.EXIT_OK if nf == 0 else ec.EXIT_ERROR
+
+
 # ---------- 参数解析 ----------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -545,6 +605,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--quick", action="store_true",
                     help="只跑无子进程的快检查（启动预检同款）")
     sp.set_defaults(func=cmd_doctor)
+
+    sp = sub.add_parser("archive", help="出图归档到 NAS 作品库（只增不删）")
+    sp.add_argument("action", choices=["list", "run"])
+    sp.add_argument("-n", "--lines", type=int, default=50, help="list 条数")
+    sp.add_argument("--all", action="store_true", help="run 全量（默认只归档自上次以来新增）")
+    sp.add_argument("--dry-run", action="store_true")
+    sp.add_argument("--target", default=None, help="落点（默认取配置，出厂为 06AIGC作品库\\图像）")
+    sp.set_defaults(func=cmd_archive)
 
     sp = sub.add_parser("models", help="外置模型库（extra_model_paths.yaml）")
     sp.add_argument("action", choices=["list", "import", "validate", "apply"])

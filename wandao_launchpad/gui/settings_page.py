@@ -96,6 +96,17 @@ class SettingsPage(QtWidgets.QWidget):
         lk.addStretch(1)
         lay.addWidget(look_box)
 
+        # ---- 出图归档 ----
+        arch_box = QtWidgets.QGroupBox("出图归档（只增不删，按日期分夹）")
+        ag = QtWidgets.QGridLayout(arch_box)
+        ag.addWidget(QtWidgets.QLabel("NAS 落点"), 0, 0)
+        self.arch_target = QtWidgets.QLineEdit()
+        ag.addWidget(self.arch_target, 0, 1)
+        btn_arch = QtWidgets.QPushButton("浏览…")
+        btn_arch.clicked.connect(self._pick_archive_target)
+        ag.addWidget(btn_arch, 0, 2)
+        lay.addWidget(arch_box)
+
         row = QtWidgets.QHBoxLayout()
         row.addStretch(1)
         btn = QtWidgets.QPushButton("保存设置")
@@ -139,6 +150,9 @@ class SettingsPage(QtWidgets.QWidget):
         ti = self.theme_combo.findData(saved_theme)
         self.theme_combo.setCurrentIndex(max(0, ti))
         self.close_tray_cb.setChecked(cfg.get_ui_pref("close_to_tray") == "1")
+        from ..archive import DEFAULT_ARCHIVE_TARGET
+        self.arch_target.setText(cfg.get_ui_pref("archive_target",
+                                                 DEFAULT_ARCHIVE_TARGET))
 
     def _selected_env(self, cfg: Config) -> Environment | None:
         row = self.env_list.currentRow()
@@ -231,6 +245,7 @@ class SettingsPage(QtWidgets.QWidget):
         cfg.mirrors.hf = self.mir_hf.text().strip()
         cfg.mirrors.github_proxy = self.mir_gh.text().strip()
         cfg.mirrors.pypi = self.mir_pypi.currentText().strip()
+        cfg.set_ui_pref("archive_target", self.arch_target.text().strip())
         self.store.save(cfg)
         self.saved.emit()
 
@@ -256,3 +271,8 @@ class SettingsPage(QtWidgets.QWidget):
         f, _ = QtWidgets.QFileDialog.getOpenFileName(self, "选择 python.exe", "", "python (python.exe)")
         if f:
             edit.setText(f)
+
+    def _pick_archive_target(self) -> None:
+        d = QtWidgets.QFileDialog.getExistingDirectory(self, "选择 NAS 归档落点")
+        if d:
+            self.arch_target.setText(d)

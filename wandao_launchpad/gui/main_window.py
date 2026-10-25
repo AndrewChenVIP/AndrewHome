@@ -21,8 +21,8 @@ from .workers import LogTailWorker, StartWorker, StatusWorker, StopWorker
 logger = logging.getLogger(__name__)
 
 NAV_ITEMS = [("🚀 启动", "launch"), ("📋 日志", "logs"), ("🧩 插件", "plugins"),
-             ("🧬 内核", "kernel"), ("📂 模型库", "models"), ("⚙️ 设置", "settings"),
-             ("ℹ️ 关于", "about")]
+             ("🧬 内核", "kernel"), ("📂 模型库", "models"), ("📤 归档", "archive"),
+             ("⚙️ 设置", "settings"), ("ℹ️ 关于", "about")]
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -70,17 +70,19 @@ class MainWindow(QtWidgets.QMainWindow):
         from .plugins_page import PluginsPage
         from .kernel_page import KernelPage
         from .models_page import ModelsPage
+        from .archive_page import ArchivePage
         status = self.statusBar().showMessage
         self.plugins_page = PluginsPage(store, status_cb=lambda m: status(m, 5000))
         self.kernel_page = KernelPage(store, status_cb=lambda m: status(m, 5000))
         self.models_page = ModelsPage(store, status_cb=lambda m: status(m, 5000))
+        self.archive_page = ArchivePage(store, status_cb=lambda m: status(m, 5000))
         self.settings_page = SettingsPage(store)
         self.settings_page.saved.connect(self._on_settings_saved)
         self.settings_page.theme_change_requested.connect(self._apply_theme)
         self.about_page = self._build_about_page()
         for page in (self.launch_page, self.log_page, self.plugins_page,
-                     self.kernel_page, self.models_page, self.settings_page,
-                     self.about_page):
+                     self.kernel_page, self.models_page, self.archive_page,
+                     self.settings_page, self.about_page):
             self.stack.addWidget(page)
 
         self._loaded_pages: set[int] = set()
@@ -111,7 +113,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if row not in self._loaded_pages:
             self._loaded_pages.add(row)
             page = self.stack.widget(row)
-            if page is self.plugins_page or page is self.kernel_page:
+            if page in (self.plugins_page, self.kernel_page, self.archive_page):
                 page.reload()
 
     # ---------- 启动页 ----------
