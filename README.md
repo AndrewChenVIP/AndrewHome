@@ -1,0 +1,65 @@
+# 万道启动台 WandaoLaunchpad
+
+万道自研的 ComfyUI 启动器：**只做编排器，不分叉 ComfyUI 内核**——拼参数、起进程、管配置，其余一切挂 ComfyUI 生态既有扩展点。
+
+- **GUI 与 CLI 同体**：无参数启动 = 图形界面；带子命令 = headless CLI，两者复用同一套核心层。
+- **契约稳定**：每个 CLI 命令支持 `--json` 单行输出 + 集中定义的退出码，外部脚本与 AI agent 按契约消费。
+- **进程管理严谨**：pidfile 带 create_time 身份校验（防 PID 复用误判）；杀进程一条链（优雅 → 验尸 → 强杀一次 → 验尸），绝不重复补刀、绝不按端口扫射、绝不静默提权。
+- **主线程零重活**：GUI 里所有子进程/网络/文件操作都在 QThread worker 里，表单自动保存带 500ms 防抖。
+
+## 快速开始
+
+```bash
+pip install -r requirements.txt
+
+# CLI（先在设置里配好环境，或直接编辑 launchpad/config.json）
+python -m wandao_launchpad status --json     # 0=在跑 / 3=未跑 / 1=异常
+python -m wandao_launchpad start             # 阻塞到 /system_stats 就绪
+python -m wandao_launchpad stop              # 幂等
+python -m wandao_launchpad info --json       # 查看生效配置
+python -m wandao_launchpad logs comfyui -n 100
+
+# GUI
+python -m wandao_launchpad gui
+```
+
+## 退出码契约（稳定，勿改）
+
+| 码 | 含义 |
+|---|---|
+| 0 | 成功 |
+| 1 | 通用错误（配置缺失/路径/IO/超时） |
+| 2 | start 拒绝重复启动（已在跑） |
+| 3 | status：未运行 |
+
+## 目录结构
+
+```
+wandao_launchpad/
+├── models.py           # LaunchOptions——表单↔旗标映射的唯一事实来源
+├── command_builder.py  # 选项 → argv/env（纯函数）
+├── config.py           # ConfigStore——配置唯一入口（原子写/多环境/前向兼容）
+├── context.py          # AppContext——GUI/CLI 共享上下文（显式协议，禁止镜像属性）
+├── pidfile.py          # 唯一 pidfile 实现（create_time 身份校验）
+├── process_manager.py  # 进程生命周期唯一 owner
+├── probe.py            # /system_stats 就绪探测
+├── network.py          # 镜像三件套（HF/GitHub/PyPI）
+├── cli/                # 子命令 + 退出码契约
+└── gui/                # PyQt5 界面（workers/防抖表单/日志视图/主题token）
+```
+
+## 开发
+
+```bash
+pip install -e .[test]
+pytest            # 38 项测试：单测 + 假 ComfyUI 生命周期 e2e + 架构守卫
+```
+
+架构铁律（有测试守卫，见 `tests/test_arch_guard.py`）：
+1. core 层禁止 import PyQt5；
+2. 全项目禁止裸 `except: pass`；
+3. 同一逻辑只留一份实现。
+
+## License
+
+Apache-2.0

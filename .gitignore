@@ -1,0 +1,13 @@
+# 运行时产物（本机绝对路径，禁止入库——Mie 的前车之鉴）
+launchpad/
+*.log
+*.pid
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
