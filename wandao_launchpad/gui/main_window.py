@@ -10,7 +10,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets
 
 from .. import APP_NAME, __version__
 from ..config import ConfigStore
@@ -411,7 +411,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_auto_archived(self, copied: int, skipped: int, failed: int) -> None:
         if self._tray is None:
             return
-        from PyQt5 import QtGui
         if copied:
             self._tray.showMessage(
                 "自动归档", f"已归档 {copied} 张新图到作品库",
@@ -491,7 +490,6 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "打包失败", str(payload.get("error")))
 
     def _run_doctor(self) -> None:
-        from ..constants import pidfile_path as pfp
         from .workers import FunctionWorker
 
         def job():
@@ -526,7 +524,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
             return
         # 程序化生成托盘图标（紫底"万"字），不依赖资源文件
-        from PyQt5 import QtGui
         pix = QtGui.QPixmap(64, 64)
         pix.fill(QtGui.QColor("#7f56d9"))
         painter = QtGui.QPainter(pix)

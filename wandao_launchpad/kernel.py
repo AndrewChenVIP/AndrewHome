@@ -31,13 +31,23 @@ class KernelInfo:
 
 
 class KernelService:
-    def __init__(self, comfyui_root: Path, base_url: str | None = None):
+    def __init__(self, comfyui_root: Path, base_url: str | None = None,
+                 github_proxy: str = ""):
         """comfyui_root: 含 .git 的内核仓库（如 E:/ComfyUI_Mie_V9.0/ComfyUI）。
 
         base_url: ComfyUI 服务地址（运行中拒绝写操作）；None = 不做运行检查。
+        github_proxy: GitHub 代理前缀（配置的镜像），fetch 时改写 github.com 访问。
         """
         self.root = Path(comfyui_root)
         self.base_url = base_url
+        self.github_proxy = (github_proxy or "").strip()
+
+    def _net_args(self, args: list[str]) -> list[str]:
+        """配了代理时把 github.com 访问改写到代理（仅本次命令生效，不动 remote）。"""
+        if not self.github_proxy:
+            return args
+        return ["-c", f"url.{self.github_proxy.rstrip('/')}/https://github.com/"
+                      ".insteadOf=https://github.com/"] + args
 
     # ---------- 基础 ----------
 
@@ -99,14 +109,30 @@ class KernelService:
         tags = self._tags()
         return max(tags, key=key) if tags else None
 
+    def _upstream(self) -> str:
+        """远端默认分支：优先 origin/HEAD；未设置时按 master→main 探测
+        （ComfyUI 主分支是 master，硬编码 main 会全军覆没）。"""
+        rc, out, _ = git(["rev-parse", "--abbrev-ref", "origin/HEAD"],
+                         cwd=str(self.root), timeout=_GIT_TIMEOUT)
+        ref = out.strip() if rc == 0 else ""
+        if ref and ref != "origin/HEAD":
+            return ref
+        for cand in ("origin/master", "origin/main"):
+            rc, _, _ = git(["rev-parse", "--verify", "-q", cand],
+                           cwd=str(self.root), timeout=_GIT_TIMEOUT)
+            if rc == 0:
+                return cand
+        return "origin/master"
+
     def update(self, dry_run: bool = False, stable_only: bool = False) -> dict:
         """fetch + ff-only 更新。返回 updated/from/to/log；已是最新时 updated=False。"""
-        rc, out, err = git(["fetch", "origin", "--tags"], cwd=str(self.root),
-                           timeout=600.0)
+        rc, out, err = git(self._net_args(["fetch", "origin", "--tags"]),
+                           cwd=str(self.root), timeout=600.0)
         if rc != 0:
             raise RuntimeError(f"git fetch 失败: {err[:200]}")
 
         before = self.info()
+        upstream = self._upstream()
         if stable_only:
             tag = self.latest_stable_tag()
             if not tag:
@@ -116,11 +142,11 @@ class KernelService:
                 raise RuntimeError(f"解析标签失败: {tag}")
             target, target_desc = out.strip(), tag
         else:
-            rc, out, err = git(["rev-parse", "origin/main"], cwd=str(self.root),
+            rc, out, err = git(["rev-parse", upstream], cwd=str(self.root),
                                timeout=_GIT_TIMEOUT)
             if rc != 0:
-                raise RuntimeError("解析 origin/main 失败（分支名非 main？）")
-            target, target_desc = out.strip(), "origin/main"
+                raise RuntimeError(f"解析 {upstream} 失败")
+            target, target_desc = out.strip(), upstream
 
         head = before.commit
         if head and head in target:  # 短哈希在长哈希里 = 已在同一提交
@@ -136,7 +162,7 @@ class KernelService:
             rc, out, err = git(["checkout", target_desc], cwd=str(self.root),
                                timeout=_GIT_TIMEOUT)
         else:
-            rc, out, err = git(["merge", "--ff-only", "origin/main"],
+            rc, out, err = git(["merge", "--ff-only", upstream],
                                cwd=str(self.root), timeout=_GIT_TIMEOUT)
         if rc != 0:
             raise RuntimeError(f"更新失败: {err[:300]}")

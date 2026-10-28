@@ -8,6 +8,7 @@ import pytest
 
 from wandao_launchpad.cli import main as cli_main
 from wandao_launchpad.cli import exitcodes as ec
+from wandao_launchpad.cli.main import build_parser
 
 
 def run_cli(capsys, *argv) -> tuple[int, str, str]:
@@ -30,6 +31,16 @@ def test_info_json_contract(home, capsys):
     for key in ("launcher_version", "active_env_id", "environments", "port",
                 "launch", "mirrors", "config_path"):
         assert key in payload, f"契约字段缺失: {key}"
+
+
+def test_json_flag_position_invariant(home, capsys):
+    """--json 置于子命令前后等价（文档示例是后置写法，不能炸 argparse）。"""
+    p = build_parser()
+    assert p.parse_args(["--json", "status"]).json is True
+    assert p.parse_args(["status", "--json"]).json is True
+    assert p.parse_args(["status"]).json is False
+    assert p.parse_args(["--home", "/x", "info"]).home == "/x"
+    assert p.parse_args(["info", "--home", "/x"]).home == "/x"
 
 
 # ---------- 未配置环境的行为 ----------

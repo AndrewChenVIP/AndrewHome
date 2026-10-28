@@ -16,9 +16,16 @@ from ..config import ConfigStore
 from ..constants import pidfile_path
 from ..context import build_context
 from ..process_manager import ProcessManager
-from ..probe import probe
 
 logger = logging.getLogger(__name__)
+
+
+def _error_payload(exc: Exception) -> dict:
+    """worker 异常 → 用户可读的 payload。空配置（LookupError）转引导文案，
+    其余原样带出。"""
+    if isinstance(exc, LookupError):
+        return {"error": "未配置 ComfyUI 环境——请到「设置」页添加环境后重试"}
+    return {"error": str(exc)}
 
 
 class _Worker(QtCore.QThread):
@@ -42,7 +49,7 @@ class FunctionWorker(_Worker):
             self._done(ok, payload if isinstance(payload, dict) else {"result": payload})
         except Exception as exc:  # noqa: BLE001 —— worker 边界必须兜底并上报
             logger.error("FunctionWorker 异常", exc_info=True)
-            self._done(False, {"error": str(exc)})
+            self._done(False, _error_payload(exc))
 
 
 class StartWorker(_Worker):
@@ -74,7 +81,7 @@ class StartWorker(_Worker):
             self._done(res.started and res.ready, payload)
         except Exception as exc:  # noqa: BLE001 —— worker 边界必须兜底并上报
             logger.error("StartWorker 异常", exc_info=True)
-            self._done(False, {"error": str(exc)})
+            self._done(False, _error_payload(exc))
 
 
 class StopWorker(_Worker):
@@ -92,7 +99,7 @@ class StopWorker(_Worker):
                        {"stopped": res.stopped, "pid": res.pid, "error": res.error})
         except Exception as exc:  # noqa: BLE001
             logger.error("StopWorker 异常", exc_info=True)
-            self._done(False, {"error": str(exc)})
+            self._done(False, _error_payload(exc))
 
 
 class StatusWorker(_Worker):
@@ -111,7 +118,7 @@ class StatusWorker(_Worker):
             self._done(True, st)
         except Exception as exc:  # noqa: BLE001
             logger.error("StatusWorker 异常", exc_info=True)
-            self._done(False, {"error": str(exc)})
+            self._done(False, _error_payload(exc))
 
 
 class ThumbWorker(_Worker):
@@ -177,7 +184,7 @@ class AutoArchiveWorker(_Worker):
             output_dir = output_dir_of(build_context(self.store.load()).comfyui_root)
         except Exception as exc:  # noqa: BLE001
             logger.error("自动归档：环境不可用", exc_info=True)
-            self._done(False, {"error": str(exc)})
+            self._done(False, _error_payload(exc))
             return
 
         while not self._stop_flag:
@@ -211,7 +218,7 @@ class AutoArchiveWorker(_Worker):
                 if result["failed"]:
                     last_fail_at = time.time()
                     self.archived_sig.emit(0, 0, len(result["failed"]))
-            except Exception as exc:  # noqa: BLE001 —— 看门循环不许死
+            except Exception:  # noqa: BLE001 —— 看门循环不许死
                 logger.error("自动归档周期异常", exc_info=True)
                 last_fail_at = time.time()
         self._done(True, {})

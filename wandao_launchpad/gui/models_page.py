@@ -182,6 +182,22 @@ class ModelsPage(QtWidgets.QWidget):
 
     def apply(self) -> None:
         self._write_back_current()
+        # 护栏：空库覆盖非空 yaml = 一键丢掉 ComfyUI 外置模型配置（虽备份可救），
+        # 仅这个危险组合弹确认，常规应用不打扰
+        if sum(1 for l in self._libs if l.enabled) == 0:
+            svc0 = self._svc()
+            try:
+                yaml_nonempty = (svc0.yaml_path.exists()
+                                 and svc0.yaml_path.read_text(encoding="utf-8-sig").strip())
+            except OSError:
+                yaml_nonempty = False
+            if yaml_nonempty and QtWidgets.QMessageBox.warning(
+                    self, "应用确认",
+                    "当前未启用任何外置库，应用后 extra_model_paths.yaml 将变成空配置"
+                    "（ComfyUI 会挂不上外置模型）。旧文件会备份为 .yaml.bak。继续？",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No) != QtWidgets.QMessageBox.Yes:
+                return
 
         def job():
             svc = self._svc()

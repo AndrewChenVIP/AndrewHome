@@ -357,7 +357,8 @@ def cmd_kernel(args) -> int:
         _emit({"ok": False, "error": err}, args.json, f"错误: {err}")
         return ec.EXIT_ERROR
     svc = KernelService(ctx.comfyui_root / "ComfyUI",
-                        base_url=None if args.action == "info" else ctx.base_url)
+                        base_url=None if args.action == "info" else ctx.base_url,
+                        github_proxy=store.load().mirrors.github_proxy)
 
     try:
         if args.action == "info":
@@ -377,7 +378,8 @@ def cmd_kernel(args) -> int:
                     index_url=_pip_index(store))
             payload = {"ok": True, **result, "deps": deps}
             code = ec.EXIT_OK if result["updated"] else ec.EXIT_ALREADY_LATEST
-            msg = (f"已更新 → {result['to']}" if result["updated"]
+            verb = "将更新（dry-run 演练）" if args.dry_run else "已更新"
+            msg = (f"{verb} → {result['to']}" if result["updated"]
                    else f"已是最新（{result['to']}）")
             if deps:
                 if deps.get("ran") and deps.get("ok"):
@@ -461,7 +463,7 @@ def cmd_support(args) -> int:
 
 
 def cmd_doctor(args) -> int:
-    from ..doctor import blockers, run_checks, summarize
+    from ..doctor import run_checks, summarize
 
     store = ConfigStore(Path(args.home) if args.home else None)
     ctx, err = _load_ctx(store, None)
@@ -541,6 +543,14 @@ def cmd_archive(args) -> int:
 # ---------- 参数解析 ----------
 
 def build_parser() -> argparse.ArgumentParser:
+    # 子命令层也接受 --json/--home：default=SUPPRESS 使 argv 里没出现时不覆盖
+    # 全局层的取值，从而 `--json status` 与 `status --json` 两种写法等价
+    sub_common = argparse.ArgumentParser(add_help=False)
+    sub_common.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                            help="以单行 JSON 输出（可置于子命令前后）")
+    sub_common.add_argument("--home", default=argparse.SUPPRESS,
+                            help="配置目录（默认：包所在目录/launchpad）")
+
     p = argparse.ArgumentParser(
         prog="wandao-launchpad",
         description="万道启动台 —— ComfyUI 启动器（无参数启动 GUI；带子命令为 headless CLI）")
@@ -548,29 +558,30 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--home", default=None, help="配置目录（默认：包所在目录/launchpad）")
     sub = p.add_subparsers(dest="command")
 
-    sp = sub.add_parser("start", help="启动 ComfyUI（阻塞到就绪或超时）")
+    sp = sub.add_parser("start", parents=[sub_common],
+                        help="启动 ComfyUI（阻塞到就绪或超时）")
     sp.add_argument("--no-wait", action="store_true", help="spawn 后立即返回")
     sp.add_argument("--timeout", type=float, default=180.0, help="等待就绪上限秒数")
     sp.add_argument("--env", default=None, help="一次性指定环境 id（默认用激活环境）")
     sp.set_defaults(func=cmd_start)
 
-    sp = sub.add_parser("stop", help="停止 ComfyUI（幂等；作用于当前在跑的实例）")
+    sp = sub.add_parser("stop", parents=[sub_common], help="停止 ComfyUI（幂等；作用于当前在跑的实例）")
     sp.set_defaults(func=cmd_stop)
 
-    sp = sub.add_parser("status", help="查询运行状态")
+    sp = sub.add_parser("status", parents=[sub_common], help="查询运行状态")
     sp.set_defaults(func=cmd_status)
 
-    sp = sub.add_parser("restart", help="先停后启")
+    sp = sub.add_parser("restart", parents=[sub_common], help="先停后启")
     sp.add_argument("--no-wait", action="store_true")
     sp.add_argument("--timeout", type=float, default=180.0)
     sp.add_argument("--env", default=None)
     sp.set_defaults(func=cmd_restart)
 
-    sp = sub.add_parser("info", help="打印当前生效配置（不启动任何东西）")
+    sp = sub.add_parser("info", parents=[sub_common], help="打印当前生效配置（不启动任何东西）")
     sp.add_argument("--env", default=None)
     sp.set_defaults(func=cmd_info)
 
-    sp = sub.add_parser("logs", help="查看日志（comfyui/launcher）")
+    sp = sub.add_parser("logs", parents=[sub_common], help="查看日志（comfyui/launcher）")
     sp.add_argument("target", choices=["comfyui", "launcher"], default="comfyui",
                     nargs="?", help="日志目标")
     sp.add_argument("-n", "--lines", type=int, default=100)
@@ -579,7 +590,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-follow", dest="follow", action="store_false")
     sp.set_defaults(func=cmd_logs, follow=False)
 
-    sp = sub.add_parser("plugins", help="管理 custom_nodes 插件")
+    sp = sub.add_parser("plugins", parents=[sub_common], help="管理 custom_nodes 插件")
     sp.add_argument("action", choices=["list", "enable", "disable", "uninstall",
                                        "check-updates", "update", "update-all",
                                        "search", "install"])
@@ -592,7 +603,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="跳过 requirements.txt 依赖安装（install/update/update-all）")
     sp.set_defaults(func=cmd_plugins)
 
-    sp = sub.add_parser("kernel", help="ComfyUI 内核版本管理")
+    sp = sub.add_parser("kernel", parents=[sub_common], help="ComfyUI 内核版本管理")
     sp.add_argument("action", choices=["info", "update", "log", "checkout"])
     sp.add_argument("ref", nargs="?", help="checkout 目标（commit/tag/branch）")
     sp.add_argument("--dry-run", action="store_true")
@@ -605,12 +616,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--yes", action="store_true", help="checkout 确认位")
     sp.set_defaults(func=cmd_kernel)
 
-    sp = sub.add_parser("doctor", help="启动前体检（环境/入口/端口/磁盘/依赖/内核/模型库）")
+    sp = sub.add_parser("doctor", parents=[sub_common], help="启动前体检（环境/入口/端口/磁盘/依赖/内核/模型库）")
     sp.add_argument("--quick", action="store_true",
                     help="只跑无子进程的快检查（启动预检同款）")
     sp.set_defaults(func=cmd_doctor)
 
-    sp = sub.add_parser("archive", help="出图归档到 NAS 作品库（只增不删）")
+    sp = sub.add_parser("archive", parents=[sub_common], help="出图归档到 NAS 作品库（只增不删）")
     sp.add_argument("action", choices=["list", "run"])
     sp.add_argument("-n", "--lines", type=int, default=50, help="list 条数")
     sp.add_argument("--all", action="store_true", help="run 全量（默认只归档自上次以来新增）")
@@ -618,11 +629,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--target", default=None, help="落点（默认取配置，出厂为 06AIGC作品库\\图像）")
     sp.set_defaults(func=cmd_archive)
 
-    sp = sub.add_parser("models", help="外置模型库（extra_model_paths.yaml）")
+    sp = sub.add_parser("models", parents=[sub_common], help="外置模型库（extra_model_paths.yaml）")
     sp.add_argument("action", choices=["list", "import", "validate", "apply"])
     sp.set_defaults(func=cmd_models)
 
-    sp = sub.add_parser("support", help="打包排障支持包（info+日志）为 zip")
+    sp = sub.add_parser("support", parents=[sub_common], help="打包排障支持包（info+日志）为 zip")
     sp.add_argument("--out", default=None, help="输出 zip 路径（默认配置目录/support-时间戳.zip）")
     sp.set_defaults(func=cmd_support)
 

@@ -9,8 +9,7 @@ from __future__ import annotations
 from PyQt5 import QtCore, QtWidgets
 
 from ..config import ConfigStore
-from ..models import (ATTENTION_CHOICES, MODE_CHOICES, VRAM_CHOICES,
-                      LaunchOptions)
+from ..models import MODE_CHOICES, LaunchOptions
 
 
 class LaunchForm(QtWidgets.QWidget):

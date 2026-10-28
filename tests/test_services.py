@@ -329,6 +329,18 @@ def test_empty_parse_never_poisons_cache(tmp_path, monkeypatch):
     assert not (tmp_path / "cache" / "node_list_cache.json").exists()
 
 
+def test_kernel_proxy_net_args(tmp_path):
+    """配了 GitHub 代理时 fetch 命令前注入 insteadOf 改写；未配则原样。"""
+    svc = KernelService(tmp_path, github_proxy="https://gh-proxy.com/")
+    args = svc._net_args(["fetch", "origin", "--tags"])
+    assert args[0] == "-c"
+    assert args[1].startswith("url.https://gh-proxy.com/https://github.com/")
+    assert args[1].endswith(".insteadOf=https://github.com/")
+    assert args[2:] == ["fetch", "origin", "--tags"]
+    bare = KernelService(tmp_path)
+    assert bare._net_args(["fetch", "origin"]) == ["fetch", "origin"]
+
+
 def test_install_from_local_git_url(tmp_path):
     cn = tmp_path / "custom_nodes"
     cn.mkdir()

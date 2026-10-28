@@ -77,9 +77,11 @@ class KernelPage(QtWidgets.QWidget):
         lay.addWidget(hist_box)
 
     def _svc(self, for_write=False) -> KernelService:
-        ctx = build_context(self.store.load())
+        cfg = self.store.load()
+        ctx = build_context(cfg)
         return KernelService(ctx.comfyui_root / "ComfyUI",
-                             base_url=ctx.base_url if for_write else None)
+                             base_url=ctx.base_url if for_write else None,
+                             github_proxy=cfg.mirrors.github_proxy)
 
     def _run(self, fn, on_done):
         self._worker = FunctionWorker(fn, self)
