@@ -243,6 +243,92 @@ def test_search_ranking_and_cache(tmp_path, monkeypatch):
     assert svc.search("impact")
 
 
+def test_search_cdn_channel_fallback(tmp_path, monkeypatch):
+    """直连挂 → 自动落到第二清单源（CDN 通道），搜索不炸。"""
+    import wandao_launchpad.plugins as plugins_mod
+
+    svc = _svc_with_local_list(tmp_path, monkeypatch)
+    monkeypatch.setattr(plugins_mod, "NODE_LIST_URL",
+                        (tmp_path / "nope.json").as_uri())
+    monkeypatch.setattr(plugins_mod, "NODE_LIST_CDN_URL",
+                        (tmp_path / "node_list.json").as_uri())
+    hits = svc.search("impact")
+    assert [e.name for e in hits] == ["Impact Pack"]
+
+
+def test_search_stale_cache_rescue(tmp_path, monkeypatch):
+    """全通道挂 → 降级用过期缓存（容灾），不再直接 RuntimeError。"""
+    import time as time_mod
+
+    import wandao_launchpad.plugins as plugins_mod
+
+    svc = _svc_with_local_list(tmp_path, monkeypatch)
+    assert svc.search("kj")                       # 先种缓存
+    cache_file = tmp_path / "cache" / "node_list_cache.json"
+    raw = json.loads(cache_file.read_text(encoding="utf-8"))
+    raw["fetched_at"] = time_mod.time() - 7200    # 把缓存改旧（超 1h TTL）
+    cache_file.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(plugins_mod, "NODE_LIST_URL",
+                        (tmp_path / "nope.json").as_uri())
+    monkeypatch.setattr(plugins_mod, "NODE_LIST_CDN_URL",
+                        (tmp_path / "nope2.json").as_uri())
+    hits = svc.search("impact")                   # 过期缓存兜底
+    assert [e.name for e in hits] == ["Impact Pack"]
+
+
+def test_search_no_cache_all_channels_down_raises(tmp_path, monkeypatch):
+    """无缓存且全通道挂 → 仍报错（容灾不是无限兜底）。"""
+    import wandao_launchpad.plugins as plugins_mod
+
+    cn = tmp_path / "custom_nodes"
+    cn.mkdir()
+    svc = PluginService(cn, cache_dir=tmp_path / "cache")
+    monkeypatch.setattr(plugins_mod, "NODE_LIST_URL",
+                        (tmp_path / "nope.json").as_uri())
+    monkeypatch.setattr(plugins_mod, "NODE_LIST_CDN_URL",
+                        (tmp_path / "nope2.json").as_uri())
+    with pytest.raises(RuntimeError):
+        svc.search("impact")
+
+
+def test_parse_real_catalog_shape(tmp_path, monkeypatch):
+    """真实清单形态：dict 包裹 custom_nodes、安装地址在 files 字段。"""
+    import wandao_launchpad.plugins as plugins_mod
+
+    real = {"custom_nodes": [
+        {"author": "ltdrdata", "title": "Impact Pack", "description": "detector",
+         "reference": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
+         "files": ["https://github.com/ltdrdata/ComfyUI-Impact-Pack"],
+         "install_type": "git-clone"},
+    ]}
+    list_file = tmp_path / "real_list.json"
+    list_file.write_text(json.dumps(real), encoding="utf-8")
+    monkeypatch.setattr(plugins_mod, "NODE_LIST_URL", list_file.as_uri())
+    cn = tmp_path / "custom_nodes"
+    cn.mkdir()
+    svc = PluginService(cn, cache_dir=tmp_path / "cache")
+    hits = svc.search("impact")
+    assert hits and hits[0].author == "ltdrdata"
+    assert hits[0].install_url == "https://github.com/ltdrdata/ComfyUI-Impact-Pack"
+
+
+def test_empty_parse_never_poisons_cache(tmp_path, monkeypatch):
+    """清单拿到但解析为空 → 不写缓存，不冒充有效结果。"""
+    import wandao_launchpad.plugins as plugins_mod
+
+    empty_file = tmp_path / "empty_list.json"
+    empty_file.write_text(json.dumps({"custom_nodes": []}), encoding="utf-8")
+    monkeypatch.setattr(plugins_mod, "NODE_LIST_URL", empty_file.as_uri())
+    monkeypatch.setattr(plugins_mod, "NODE_LIST_CDN_URL",
+                        (tmp_path / "nope2.json").as_uri())
+    cn = tmp_path / "custom_nodes"
+    cn.mkdir()
+    svc = PluginService(cn, cache_dir=tmp_path / "cache")
+    with pytest.raises(RuntimeError):
+        svc.search("impact")
+    assert not (tmp_path / "cache" / "node_list_cache.json").exists()
+
+
 def test_install_from_local_git_url(tmp_path):
     cn = tmp_path / "custom_nodes"
     cn.mkdir()

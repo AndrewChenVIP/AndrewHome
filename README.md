@@ -1,6 +1,6 @@
 # 万道启动台 WandaoLaunchpad
 
-> **v0.10.0**（2026-10-26 阶段性收官）· 104/104 测试全绿 · 阶段性暂停，重启入口见 `docs/交接文档-v0.10.0.md`
+> **v0.10.1**（2026-10-29 重启开发）· 109/109 测试全绿 · 交接入口见 `docs/交接文档-v0.10.0.md`
 
 万道自研的 ComfyUI 启动器：**只做编排器，不分叉 ComfyUI 内核**——拼参数、起进程、管配置，其余一切挂 ComfyUI 生态既有扩展点。
 
@@ -59,7 +59,7 @@ python -m wandao_launchpad models apply              # sidecar 渲染 yaml（旧
 ## 插件搜索与安装（v0.3）
 
 ```bash
-python -m wandao_launchpad plugins search animate    # 搜官方 custom-node-list（1h 缓存，直连失败自动走代理）
+python -m wandao_launchpad plugins search animate    # 搜官方 custom-node-list（1h 缓存；直连→代理→CDN 三通道，全挂降级过期缓存）
 python -m wandao_launchpad plugins install ComfyUI-KJNodes   # 按名安装（清单解析）
 python -m wandao_launchpad plugins install https://github.com/xxx/yyy  # 或直接 git URL
 ```

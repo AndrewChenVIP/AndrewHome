@@ -28,6 +28,9 @@ GIT_TIMEOUT = 30.0
 # ComfyUI-Manager 官方插件清单（搜索/按名安装的解析源）
 NODE_LIST_URL = ("https://raw.githubusercontent.com/ltdrdata/"
                  "ComfyUI-Manager/main/custom-node-list.json")
+# 第二清单源：jsDelivr CDN 镜像（免代理可达），直连/代理全挂时的网络侧兜底
+NODE_LIST_CDN_URL = ("https://cdn.jsdelivr.net/gh/ltdrdata/"
+                     "ComfyUI-Manager@main/custom-node-list.json")
 NODE_LIST_TTL_SEC = 3600.0
 
 
@@ -184,38 +187,35 @@ class PluginService:
     def _node_list_cache_path(self) -> Path | None:
         return self.cache_dir / "node_list_cache.json" if self.cache_dir else None
 
-    def _load_node_list(self, force: bool = False) -> list[NodeListEntry]:
-        """官方 custom-node-list.json（直连失败自动走代理；缓存 1h）。"""
-        import urllib.request
+    def _cache_entries(self, cache: Path | None, *,
+                       ignore_ttl: bool = False) -> list[NodeListEntry] | None:
+        """读缓存清单；过期/损坏返回 None（ignore_ttl=True 供全通道失败时容灾）。"""
+        if not (cache and cache.exists()):
+            return None
+        try:
+            raw = json.loads(cache.read_text(encoding="utf-8-sig"))
+            if not ignore_ttl and \
+                    time.time() - float(raw.get("fetched_at", 0)) >= NODE_LIST_TTL_SEC:
+                return None
+            return [NodeListEntry(**e) for e in raw.get("nodes", [])]
+        except (OSError, ValueError, TypeError):
+            logger.debug("节点清单缓存读取失败（ignore_ttl=%s）", ignore_ttl,
+                         exc_info=True)
+            return None
 
-        cache = self._node_list_cache_path()
-        if cache and cache.exists() and not force:
-            try:
-                raw = json.loads(cache.read_text(encoding="utf-8-sig"))
-                if time.time() - float(raw.get("fetched_at", 0)) < NODE_LIST_TTL_SEC:
-                    return [NodeListEntry(**e) for e in raw.get("nodes", [])]
-            except (OSError, ValueError, TypeError):
-                logger.debug("节点清单缓存失效，重取", exc_info=True)
-
-        urls = [NODE_LIST_URL]
-        if self.github_proxy:
-            urls.append(self.github_proxy.rstrip("/") + "/" + NODE_LIST_URL)
-        data = None
-        last_err = ""
-        for url in urls:
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": "WandaoLaunchpad"})
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                break
-            except (OSError, ValueError) as exc:
-                last_err = str(exc)
-                logger.debug("节点清单获取失败 %s: %s", url, exc)
-        if data is None:
-            raise RuntimeError(f"插件清单获取失败（直连+代理都失败）: {last_err[:200]}")
-
+    @staticmethod
+    def _parse_node_list(data: object) -> list[NodeListEntry]:
+        """官方清单 → 条目。顶层兼容 dict（现行 custom_nodes 包裹）与 list（旧形态）；
+        条目安装地址兼容 installed_ver/aux_id（旧 node_db 形态）与 files（现行真身）。"""
+        items: object = []
+        if isinstance(data, dict):
+            items = data.get("custom_nodes") or []
+        elif isinstance(data, list):
+            items = data
+        if not isinstance(items, list):
+            items = []
         entries: list[NodeListEntry] = []
-        for item in data if isinstance(data, list) else []:
+        for item in items:
             try:
                 name = str(item.get("title", "") or item.get("name", "") or "")
                 ref = str(item.get("reference", "") or "")
@@ -224,12 +224,19 @@ class PluginService:
                     if isinstance(sec, dict) and str(sec.get("type", "")) == "git-clone":
                         install = str(sec.get("id", ""))
                         break
+                if not install:
+                    for f in item.get("files", []) or []:
+                        f = str(f)
+                        if f.startswith(("http://", "https://")):
+                            install = f
+                            break
                 if not install and ref:
                     install = ref
-                author = ""
-                m = re.search(r"github\.com/([^/]+)/", ref + "/")
-                if m:
-                    author = m.group(1)
+                author = str(item.get("author", "") or "")
+                if not author:
+                    m = re.search(r"github\.com/([^/]+)/", ref + "/")
+                    if m:
+                        author = m.group(1)
                 if name and install:
                     entries.append(NodeListEntry(
                         name=name[:120],
@@ -237,6 +244,46 @@ class PluginService:
                         reference=ref, install_url=install, author=author))
             except (AttributeError, TypeError):
                 logger.debug("清单条目解析跳过", exc_info=True)
+        return entries
+
+    def _load_node_list(self, force: bool = False) -> list[NodeListEntry]:
+        """官方 custom-node-list.json（直连→代理→CDN 三通道；缓存 1h；
+        全通道挂时降级用过期缓存——清单只影响发现，安装仍走 git HEAD；
+        拿到但解析为空视同通道失败，绝不把空清单写进缓存。"""
+        import urllib.request
+
+        cache = self._node_list_cache_path()
+        if not force:
+            fresh = self._cache_entries(cache)
+            if fresh is not None:
+                return fresh
+
+        urls = [NODE_LIST_URL]
+        if self.github_proxy:
+            urls.append(self.github_proxy.rstrip("/") + "/" + NODE_LIST_URL)
+        urls.append(NODE_LIST_CDN_URL)
+        entries: list[NodeListEntry] = []
+        last_err = ""
+        for url in urls:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "WandaoLaunchpad"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                parsed = self._parse_node_list(data)
+            except (OSError, ValueError) as exc:
+                last_err = str(exc)
+                logger.debug("节点清单获取失败 %s: %s", url, exc)
+                continue
+            if parsed:
+                entries = parsed
+                break
+            logger.debug("清单通道返回空/不可解析，试下一通道: %s", url)
+        if not entries:
+            stale = self._cache_entries(cache, ignore_ttl=True)
+            if stale:
+                logger.warning("插件清单全部通道失败，降级用本地缓存（可能过期）")
+                return stale
+            raise RuntimeError(f"插件清单获取失败（直连/代理/CDN 全部失败）: {last_err[:200]}")
         if cache:
             try:
                 cache.parent.mkdir(parents=True, exist_ok=True)
