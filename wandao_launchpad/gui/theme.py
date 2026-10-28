@@ -127,13 +127,13 @@ def build_qss() -> str:
     /* ---------- 卡片 ---------- */
     QGroupBox {{
         background: {c('card_bg')}; border: 1px solid {c('card_border')};
-        border-radius: 12px; margin-top: 14px; padding: 14px 16px 14px 16px;
+        border-radius: 12px; margin-top: 6px; padding: 32px 16px 14px 16px;
         font-size: 14px; font-weight: bold; color: {c('text')};
     }}
     QGroupBox::title {{
-        subcontrol-origin: margin; subcontrol-position: top left;
-        left: 14px; top: -4px; padding: 0 6px;
-        background: {c('card_bg')}; color: {c('text')};
+        subcontrol-origin: padding; subcontrol-position: top left;
+        left: 16px; top: 10px; padding: 0;
+        background: transparent; color: {c('text')};
     }}
 
     /* ---------- 输入 ---------- */
@@ -146,6 +146,10 @@ def build_qss() -> str:
     QLineEdit:hover, QSpinBox:hover, QComboBox:hover {{ border-color: {c('accent_hover')}; }}
     QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {{ color: {c('text_muted')}; }}
     QComboBox::drop-down {{ border: none; width: 26px; }}
+    QComboBox::down-arrow {{
+        border-left: 4px solid transparent; border-right: 4px solid transparent;
+        border-top: 5px solid {c('text_muted')}; width: 0; height: 0;
+    }}
     QComboBox QAbstractItemView {{
         background: {c('card_bg')}; color: {c('text')};
         border: 1px solid {c('card_border')}; border-radius: 8px;
@@ -170,15 +174,11 @@ def build_qss() -> str:
     QPushButton:pressed {{ background: {c('accent_soft')}; }}
     QPushButton:disabled {{ color: {c('text_muted')}; border-color: {c('card_border')}; }}
     QPushButton#primary {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c('accent')}, stop:1 {c('accent_hover')});
+        background: {c('accent')};
         color: #ffffff; font-size: 15px; font-weight: bold;
         padding: 13px; border: none; border-radius: 10px;
     }}
-    QPushButton#primary:hover {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {c('accent_hover')}, stop:1 {c('accent_pressed')});
-    }}
+    QPushButton#primary:hover {{ background: {c('accent_hover')}; }}
     QPushButton#primary:pressed {{ background: {c('accent_pressed')}; }}
     QPushButton#stop {{
         background: {c('danger')}; color: #ffffff; font-size: 15px;
@@ -218,6 +218,10 @@ def build_qss() -> str:
     QListWidget::item:hover {{ background: {c('table_alt')}; }}
 
     /* ---------- 日志 / 状态栏 / 菜单 ---------- */
+    QScrollArea {{
+        background: transparent; border: none;
+    }}
+    QScrollArea > QWidget > QWidget {{ background: transparent; }}
     QPlainTextEdit#logview {{
         background: {c('log_bg')}; color: {c('text')};
         font-family: "Cascadia Mono", Consolas, "Courier New", monospace;

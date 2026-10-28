@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets
 
 from ..config import ConfigStore
 from ..context import build_context
 from ..plugins import PluginService
+from . import theme
 from .workers import FunctionWorker
 
 _COLS = ["插件", "类型", "状态", "更新"]
@@ -53,8 +54,12 @@ class PluginsPage(QtWidgets.QWidget):
         self.table.setHorizontalHeaderLabels(_COLS)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(0, 320)
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        for col, w in ((1, 80), (2, 90), (3, 110)):
+            self.table.setColumnWidth(col, w)
+        self.table.verticalHeader().setFixedWidth(36)
         lay.addWidget(self.table)
 
     # ---------- 基础 ----------
@@ -92,15 +97,25 @@ class PluginsPage(QtWidgets.QWidget):
 
     def _fill(self, updates: dict) -> None:
         self.table.setRowCount(0)
+        muted = QtGui.QColor(theme.c("text_muted"))
+        danger = QtGui.QColor(theme.c("danger"))
+        accent = QtGui.QColor(theme.c("accent"))
         for p in self._plugins:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            state = "✅ 启用" if p["enabled"] else "⛔ 停用"
             upinfo = updates.get(p["dir_name"])
-            up_txt = "—" if upinfo is None else ("🔄 可更新" if upinfo else "最新")
-            for col, text in enumerate((p["name"], "git" if p["is_git"] else "本地",
-                                        state, up_txt)):
+            up_txt = "—" if upinfo is None else ("可更新" if upinfo else "最新")
+            cells = (
+                (p["name"], None),
+                ("git" if p["is_git"] else "本地", muted),
+                ("启用" if p["enabled"] else "停用",
+                 muted if p["enabled"] else danger),
+                (up_txt, accent if upinfo else muted),
+            )
+            for col, (text, color) in enumerate(cells):
                 item = QtWidgets.QTableWidgetItem(text)
+                if color is not None:
+                    item.setForeground(color)
                 if col == 0:
                     item.setData(QtCore.Qt.UserRole, p["dir_name"])
                 self.table.setItem(row, col, item)

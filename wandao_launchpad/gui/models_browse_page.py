@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from PyQt5 import QtCore, QtWidgets
 
@@ -12,6 +13,13 @@ from ..model_paths import ModelPathsService, scan_installed_models
 from .workers import FunctionWorker
 
 _COLS = ["文件", "大小", "修改时间", "来源"]
+
+_NOISE_NAMES = {".gitattributes", "CACHEDIR.TAG"}
+
+
+def _is_noise(name: str) -> bool:
+    """ComfyUI 缓存元数据不是模型，浏览视图不展示。"""
+    return name in _NOISE_NAMES or name.endswith(".metadata")
 
 
 def _fmt_size(n: int) -> str:
@@ -87,13 +95,15 @@ class ModelsBrowsePage(QtWidgets.QWidget):
         if not ok:
             self.status_cb(f"盘点失败: {payload.get('error')}")
             return
-        self._data = payload["data"]
+        self._data = {t: [f for f in fs if not _is_noise(f["name"])]
+                      for t, fs in payload["data"].items()}
+        self._data = {t: fs for t, fs in self._data.items() if fs}
         self.type_list.blockSignals(True)
         self.type_list.clear()
         for typ in sorted(self._data, key=lambda t: -len(self._data[t])):
             self.type_list.addItem(f"{typ}  ({len(self._data[typ])})")
         self.type_list.blockSignals(False)
-        total = payload.get("total", 0)
+        total = sum(len(v) for v in self._data.values())
         self.count_label.setText(f"{len(self._data)} 类 · 共 {total} 个文件")
         if self._data:
             self.type_list.setCurrentRow(0)

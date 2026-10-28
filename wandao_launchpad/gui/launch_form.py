@@ -94,7 +94,6 @@ class LaunchForm(QtWidgets.QWidget):
 
         for box in (box1, box2, box3):
             root.addWidget(box)
-        root.addStretch(1)
 
         # 防抖定时器：任何改动 500ms 后落盘一次
         self._debounce = QtCore.QTimer(self)

@@ -22,7 +22,17 @@ class SettingsPage(QtWidgets.QWidget):
         self.store = store
         self._current_env_id: str = ""
 
-        lay = QtWidgets.QVBoxLayout(self)
+        # 内容超过一屏：整页滚动，防止窗口变矮时卡片内部被压塌
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        body = QtWidgets.QWidget()
+        scroll.setWidget(body)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+
+        lay = QtWidgets.QVBoxLayout(body)
         lay.setContentsMargins(20, 16, 20, 16)
 
         # ---- 环境管理 ----

@@ -146,7 +146,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.form = LaunchForm(self.store)
         self.form.changed.connect(lambda: self.statusBar().showMessage("配置已保存", 1500))
-        lay.addWidget(self.form, 1)
+        lay.addWidget(self.form)
 
         # 运行信息卡（只读，当前环境摘要）
         info_box = QtWidgets.QGroupBox("运行信息")

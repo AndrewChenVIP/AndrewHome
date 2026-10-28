@@ -140,7 +140,10 @@ class ArchivePage(QtWidgets.QWidget):
         wm = self._watermark()
         for it in self._items:
             mtime = datetime.fromtimestamp(it["mtime"]).strftime("%m-%d %H:%M")
-            text = f"{Path(it['rel']).name}\n{_fmt_size(it['size'])} · {mtime}"
+            fname = Path(it["rel"]).name
+            if len(fname) > 20:
+                fname = fname[:19] + "…"
+            text = f"{fname}\n{_fmt_size(it['size'])} · {mtime}"
             item = QtWidgets.QListWidgetItem(text)
             item.setData(QtCore.Qt.UserRole, it)
             item.setFlags(QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsEnabled
